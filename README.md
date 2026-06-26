@@ -88,22 +88,13 @@ bin/test tests/Feature/MyTest.php     # specific file
 
 ### Cleaning Up
 
-Drop all per-worktree test databases (add this to your project's Makefile):
-
-```makefile
-clean-test-dbs:
-	@echo "Dropping all 'testing-*' databases..."
-	@vendor/bin/sail exec -T mysql mysql -u root -N -e \
-		"SELECT CONCAT('DROP DATABASE \`', schema_name, '\`;') FROM information_schema.schemata WHERE schema_name LIKE 'testing-%'" \
-		| vendor/bin/sail exec -T mysql mysql -u root -v
-	@echo "Done."
-```
-
-Then run:
+Drop all per-worktree test databases:
 
 ```bash
-make clean-test-dbs
+php artisan worktree:clean
 ```
+
+This lists all `testing-*` databases and asks for confirmation before dropping them. Use `--force` to skip the prompt.
 
 ## Configuration
 
