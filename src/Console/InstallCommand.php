@@ -6,6 +6,7 @@ namespace WorktreeIsolation\Console;
 
 use Illuminate\Console\Command;
 use Illuminate\Filesystem\Filesystem;
+use Symfony\Component\Process\Process;
 
 class InstallCommand extends Command
 {
@@ -14,7 +15,7 @@ class InstallCommand extends Command
         {--docker-network= : The Docker network name (e.g. myapp_sail)}
         {--force : Overwrite existing files}';
 
-    protected $description = 'Install worktree isolation scripts and configuration';
+    protected $description = 'Install worktree isolation scripts, configuration, and git hooks';
 
     public function handle(Filesystem $files): int
     {
@@ -23,6 +24,12 @@ class InstallCommand extends Command
         $force = (bool) $this->option('force');
 
         $this->info('Installing worktree isolation...');
+        $this->newLine();
+
+        // Check git version
+        if (! $this->verifyGitVersion()) {
+            return self::FAILURE;
+        }
 
         // Publish config
         $this->call('vendor:publish', [
@@ -59,10 +66,15 @@ class InstallCommand extends Command
             $force
         );
 
-        // Make scripts executable
+        // Make all scripts executable
         chmod("$basePath/bin/worktree-setup", 0755);
         chmod("$basePath/bin/test", 0755);
         chmod("$basePath/.githooks/post-checkout-worktree-setup.sh", 0755);
+
+        // Also chmod any other .githooks/*.sh that already exist
+        foreach (glob("$basePath/.githooks/*.sh") as $hookScript) {
+            chmod($hookScript, 0755);
+        }
 
         // Create .worktree-isolation.env configuration
         $this->createEnvConfig($basePath, $force);
@@ -70,16 +82,51 @@ class InstallCommand extends Command
         // Create/update .githooks.config with the post-checkout hook
         $this->ensureGitHookConfig($basePath, $files);
 
+        // Configure git to use the hooks config
+        $this->configureGitHooks($basePath);
+
         $this->newLine();
-        $this->info('Worktree isolation installed successfully!');
+        $this->info('Worktree isolation installed and activated!');
+        $this->newLine();
+        $this->line('What was done:');
+        $this->line('  - Published scripts to <comment>bin/</comment> and <comment>.githooks/</comment>');
+        $this->line('  - Made all scripts executable');
+        $this->line('  - Configured git to use <comment>.githooks.config</comment>');
+        $this->line('  - Created <comment>.worktree-isolation.env</comment> with your settings');
         $this->newLine();
         $this->line('Next steps:');
-        $this->line('  1. Edit <comment>.worktree-isolation.env</comment> with your Docker image and network names');
-        $this->line('  2. Run <comment>make setup-worktree-hooks</comment> to enable the git hook');
-        $this->line('  3. Add <comment>.worktree-isolation.env</comment> to your <comment>.gitignore</comment> if it contains secrets');
+        $this->line('  1. Review <comment>.worktree-isolation.env</comment> and adjust if needed');
+        $this->line('  2. Commit the published files');
+        $this->line('  3. Other engineers just need to run: <comment>php artisan worktree:install</comment>');
         $this->newLine();
 
         return self::SUCCESS;
+    }
+
+    private function verifyGitVersion(): bool
+    {
+        $process = new Process(['git', '--version']);
+        $process->run();
+
+        if (! $process->isSuccessful()) {
+            $this->error('Could not determine git version. Is git installed?');
+
+            return false;
+        }
+
+        preg_match('/(\d+\.\d+)/', $process->getOutput(), $matches);
+        $version = $matches[1] ?? '0.0';
+
+        if (version_compare($version, '2.54', '<')) {
+            $this->error("Git 2.54+ is required for config-based hooks. You have Git $version.");
+            $this->line('  Upgrade with: <comment>brew upgrade git</comment>');
+
+            return false;
+        }
+
+        $this->line("  Git version: $version (OK)");
+
+        return true;
     }
 
     private function publishFile(Filesystem $files, string $from, string $to, bool $force): void
@@ -151,6 +198,22 @@ class InstallCommand extends Command
             CONFIG;
             $files->put($configFile, $content.$hookEntry."\n");
             $this->line('  Created: .githooks.config');
+        }
+    }
+
+    private function configureGitHooks(string $basePath): void
+    {
+        $process = new Process(
+            ['git', 'config', '--local', 'include.path', '../.githooks.config'],
+            $basePath
+        );
+        $process->run();
+
+        if ($process->isSuccessful()) {
+            $this->line('  Configured: git include.path → .githooks.config');
+        } else {
+            $this->warn('  Warning: Could not configure git hooks automatically.');
+            $this->line('  Run manually: <comment>git config --local include.path ../.githooks.config</comment>');
         }
     }
 }

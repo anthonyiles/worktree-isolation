@@ -31,27 +31,25 @@ Then run the install command:
 php artisan worktree:install --docker-image="sail-8.5/app" --docker-network="myproject_sail"
 ```
 
-This publishes:
-- `bin/worktree-setup` — bootstrap script for new worktrees
-- `bin/test` — Docker-based test runner with per-worktree DB support
-- `.githooks/post-checkout-worktree-setup.sh` — git hook that triggers setup
-- `.githooks.config` — git hook configuration (or appends to existing)
-- `.worktree-isolation.env` — project-specific configuration
-- `config/worktree-isolation.php` — Laravel config file
+That single command does everything:
+- Verifies Git 2.54+ is installed
+- Publishes `bin/worktree-setup` and `bin/test` scripts
+- Publishes the post-checkout git hook to `.githooks/`
+- Makes all scripts executable (`chmod +x`)
+- Creates/updates `.githooks.config` with the hook registration
+- Configures `git config --local` to use the hooks
+- Creates `.worktree-isolation.env` with your Docker settings
+- Publishes `config/worktree-isolation.php`
 
-## Setup
+### For other engineers
 
-After installation, engineers enable the hooks with:
+After pulling the branch, each engineer just runs:
 
 ```bash
-make setup-worktree-hooks
+php artisan worktree:install
 ```
 
-Add the Makefile targets from `stubs/Makefile.worktree` to your project's Makefile, or include it:
-
-```makefile
-include vendor/laravel-worktree-isolation/laravel-worktree-isolation/stubs/Makefile.worktree
-```
+No separate make targets or manual chmod needed — the command is idempotent and handles everything.
 
 ## How It Works
 
@@ -90,7 +88,18 @@ bin/test tests/Feature/MyTest.php     # specific file
 
 ### Cleaning Up
 
-Drop all per-worktree test databases:
+Drop all per-worktree test databases (add this to your project's Makefile):
+
+```makefile
+clean-test-dbs:
+	@echo "Dropping all 'testing-*' databases..."
+	@vendor/bin/sail exec -T mysql mysql -u root -N -e \
+		"SELECT CONCAT('DROP DATABASE \`', schema_name, '\`;') FROM information_schema.schemata WHERE schema_name LIKE 'testing-%'" \
+		| vendor/bin/sail exec -T mysql mysql -u root -v
+	@echo "Done."
+```
+
+Then run:
 
 ```bash
 make clean-test-dbs
