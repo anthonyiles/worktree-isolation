@@ -5,49 +5,37 @@ declare(strict_types=1);
 namespace WorktreeIsolation\Console;
 
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\DB;
+use Symfony\Component\Process\Process;
 
 class CleanDatabasesCommand extends Command
 {
     protected $signature = 'worktree:clean
         {--force : Drop databases without confirmation}';
 
-    protected $description = 'Drop all per-worktree test databases (testing-*)';
+    protected $description = 'Drop all per-worktree test databases';
 
     public function handle(): int
     {
-        $databases = DB::select(
-            "SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'testing-%'"
-        );
+        $script = base_path('bin/worktree-clean');
 
-        if (empty($databases)) {
-            $this->info('No per-worktree test databases found.');
-
-            return self::SUCCESS;
+        if (! file_exists($script)) {
+            $script = dirname(__DIR__, 2).'/stubs/bin/worktree-clean';
         }
 
-        $names = array_map(fn ($row) => $row->schema_name, $databases);
+        $args = [PHP_BINARY, $script, '--project-dir='.base_path()];
 
-        $this->line('Found '.count($names).' per-worktree test database(s):');
-        foreach ($names as $name) {
-            $this->line("  - $name");
-        }
-        $this->newLine();
-
-        if (! $this->option('force') && ! $this->confirm('Drop all of these databases?')) {
-            $this->line('Aborted.');
-
-            return self::SUCCESS;
+        if ($this->option('force')) {
+            $args[] = '--force';
         }
 
-        foreach ($names as $name) {
-            DB::statement("DROP DATABASE `$name`");
-            $this->line("  Dropped: $name");
-        }
+        $process = new Process($args, base_path());
+        $process->setTimeout(60);
+        $process->setTty(Process::isTtySupported());
 
-        $this->newLine();
-        $this->info('Done. '.count($names).' database(s) removed.');
+        $process->run(function (string $type, string $buffer): void {
+            $this->output->write($buffer);
+        });
 
-        return self::SUCCESS;
+        return $process->isSuccessful() ? self::SUCCESS : self::FAILURE;
     }
 }

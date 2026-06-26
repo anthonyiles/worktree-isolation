@@ -6,28 +6,95 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Docker Image
+    | Runtime Driver
     |--------------------------------------------------------------------------
     |
-    | The Sail Docker image used to run composer install, npm install, and tests
-    | inside worktrees. This should match the image built by your project's
-    | docker-compose.yml (typically sail-8.x/app).
+    | How commands (composer install, npm install, test runner) are executed.
+    |
+    | Supported: "native", "docker-compose", "docker-image"
+    |
+    |   native         — run directly on the host (Herd, Valet, any local PHP)
+    |   docker-compose — run via `docker compose exec` in a running service
+    |   docker-image   — run via `docker run` with a standalone Docker image
     |
     */
 
-    'docker_image' => env('WORKTREE_DOCKER_IMAGE', 'sail-8.4/app'),
+    'runtime' => env('WORKTREE_RUNTIME', 'native'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Docker Compose Service
+    |--------------------------------------------------------------------------
+    |
+    | The service name used with `docker compose exec` when the runtime is
+    | "docker-compose". This should match a service in your docker-compose.yml.
+    |
+    */
+
+    'compose_service' => env('WORKTREE_COMPOSE_SERVICE', 'app'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Docker Compose File
+    |--------------------------------------------------------------------------
+    |
+    | Optional path to your docker-compose file, relative to the project root.
+    | Only used with the "docker-compose" runtime. Leave empty to use the
+    | default docker-compose.yml.
+    |
+    */
+
+    'compose_file' => env('WORKTREE_COMPOSE_FILE', ''),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Docker Image
+    |--------------------------------------------------------------------------
+    |
+    | The Docker image used to run commands when the runtime is "docker-image".
+    | This is typically the image built by your docker-compose.yml or Sail.
+    |
+    */
+
+    'docker_image' => env('WORKTREE_DOCKER_IMAGE', ''),
 
     /*
     |--------------------------------------------------------------------------
     | Docker Network
     |--------------------------------------------------------------------------
     |
-    | The Docker network your Sail services run on. By default, Sail creates a
-    | network named "{project-directory}_sail". Set this to match your project.
+    | The Docker network to attach ephemeral containers to when the runtime is
+    | "docker-image". This allows the test container to reach your database
+    | and other services.
     |
     */
 
-    'docker_network' => env('WORKTREE_DOCKER_NETWORK', 'laravel_sail'),
+    'docker_network' => env('WORKTREE_DOCKER_NETWORK', ''),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Docker Working Directory
+    |--------------------------------------------------------------------------
+    |
+    | The working directory inside the Docker container where the project is
+    | mounted. Only used with the "docker-image" runtime.
+    |
+    */
+
+    'docker_workdir' => env('WORKTREE_DOCKER_WORKDIR', '/var/www/html'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Test Command
+    |--------------------------------------------------------------------------
+    |
+    | The command used to run tests. Defaults to `php artisan test` for Laravel
+    | projects. Non-Laravel projects can set this to `php vendor/bin/phpunit`,
+    | `./vendor/bin/pest`, or any other test runner.
+    |
+    */
+
+    'test_command' => env('WORKTREE_TEST_COMMAND', 'php artisan test'),
 
     /*
     |--------------------------------------------------------------------------
@@ -83,7 +150,8 @@ return [
     |--------------------------------------------------------------------------
     |
     | These environment variable names are read from .env.testing and forwarded
-    | to the Docker container when running tests via bin/test.
+    | to the Docker container when running tests via bin/test. Only relevant
+    | for the "docker-image" runtime.
     |
     */
 

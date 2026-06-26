@@ -1,0 +1,146 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Standalone cleanup script for per-worktree test databases.
+ *
+ * No framework dependencies — uses only PDO.
+ * Laravel projects can also use `php artisan worktree:clean` which delegates here.
+ *
+ * Reads DB credentials from .worktree-isolation.env and/or .env.testing.
+ *
+ * Usage:
+ *   php bin/worktree-clean
+ *   php bin/worktree-clean --force
+ */
+
+$opts = getopt('', ['force', 'project-dir:', 'help']);
+
+if (isset($opts['help'])) {
+    fwrite(STDOUT, <<<HELP
+    Usage: php bin/worktree-clean [OPTIONS]
+
+    Drops all per-worktree test databases matching the "{base}-*" pattern.
+
+    Options:
+      --force            Drop databases without confirmation
+      --project-dir=PATH Project root (default: auto-detected)
+      --help             Show this help
+
+    HELP);
+    exit(0);
+}
+
+$force = isset($opts['force']);
+$projectDir = $opts['project-dir'] ?? dirname(__DIR__);
+
+$env = loadEnvFiles($projectDir);
+
+$host = $env['DB_HOST'] ?? '127.0.0.1';
+$port = (int) ($env['DB_PORT'] ?? 3306);
+$user = $env['DB_USERNAME'] ?? '';
+$password = $env['DB_PASSWORD'] ?? '';
+$baseDb = $env['DB_DATABASE'] ?? 'testing';
+
+$pattern = "$baseDb-%";
+
+try {
+    $dsn = "mysql:host=$host;port=$port";
+    $pdo = new PDO($dsn, $user, $password, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+    ]);
+} catch (PDOException $e) {
+    fwrite(STDERR, "Error: Could not connect to database at $host:$port\n");
+    fwrite(STDERR, "  " . $e->getMessage() . "\n\n");
+    fwrite(STDERR, "  Check DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD in .env.testing\n");
+    exit(1);
+}
+
+$stmt = $pdo->prepare('SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?');
+$stmt->execute([$pattern]);
+$databases = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+if (empty($databases)) {
+    echo "No per-worktree test databases found (pattern: $pattern).\n";
+    exit(0);
+}
+
+echo 'Found ' . count($databases) . " per-worktree test database(s):\n";
+foreach ($databases as $name) {
+    echo "  - $name\n";
+}
+echo "\n";
+
+if (! $force) {
+    echo 'Drop all of these databases? [y/N] ';
+    $answer = trim(fgets(STDIN) ?: '');
+    if (! in_array(strtolower($answer), ['y', 'yes'], true)) {
+        echo "Aborted.\n";
+        exit(0);
+    }
+}
+
+$dropped = 0;
+foreach ($databases as $name) {
+    if (preg_match('/^[a-z0-9_-]+$/', $name) !== 1) {
+        echo "  Skipping: $name (contains invalid characters)\n";
+        continue;
+    }
+
+    try {
+        $pdo->exec(sprintf('DROP DATABASE `%s`', $name));
+        echo "  Dropped: $name\n";
+        $dropped++;
+    } catch (PDOException $e) {
+        fwrite(STDERR, "  Error dropping $name: " . $e->getMessage() . "\n");
+    }
+}
+
+echo "\nDone. $dropped database(s) removed.\n";
+exit(0);
+
+// ---------------------------------------------------------------------------
+// Functions
+// ---------------------------------------------------------------------------
+
+function loadEnvFiles(string $projectDir): array
+{
+    $env = [];
+
+    $confFile = "$projectDir/.worktree-isolation.env";
+    if (file_exists($confFile)) {
+        $env = array_merge($env, parseEnvFile($confFile));
+    }
+
+    $testingEnvFile = $env['WORKTREE_TESTING_ENV_FILE'] ?? '.env.testing';
+    $testingPath = "$projectDir/$testingEnvFile";
+    if (file_exists($testingPath)) {
+        $env = array_merge($env, parseEnvFile($testingPath));
+    }
+
+    return $env;
+}
+
+function parseEnvFile(string $path): array
+{
+    $env = [];
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '' || str_starts_with($line, '#')) {
+            continue;
+        }
+        $pos = strpos($line, '=');
+        if ($pos === false) {
+            continue;
+        }
+        $key = trim(substr($line, 0, $pos));
+        $value = trim(substr($line, $pos + 1));
+        $env[$key] = $value;
+    }
+
+    return $env;
+}

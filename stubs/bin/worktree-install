@@ -1,0 +1,296 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Standalone installer for worktree isolation.
+ *
+ * No framework dependencies — uses only PHP builtins.
+ * Laravel projects can also use `php artisan worktree:install` which delegates here.
+ *
+ * Usage:
+ *   php bin/worktree-install
+ *   php bin/worktree-install --runtime=docker-compose --compose-service=app
+ *   php bin/worktree-install --runtime=docker-image --docker-image=myapp --docker-network=mynet
+ *   php bin/worktree-install --force
+ */
+
+$validRuntimes = ['native', 'docker-compose', 'docker-image'];
+
+$opts = getopt('', [
+    'runtime:',
+    'docker-image:',
+    'docker-network:',
+    'compose-service:',
+    'test-command:',
+    'force',
+    'project-dir:',
+    'stubs-dir:',
+    'help',
+]);
+
+if (isset($opts['help'])) {
+    fwrite(STDOUT, <<<HELP
+    Usage: php bin/worktree-install [OPTIONS]
+
+    Options:
+      --runtime=DRIVER       Runtime driver: native (default), docker-compose, docker-image
+      --docker-image=NAME    Docker image name (docker-image runtime)
+      --docker-network=NAME  Docker network name (docker-image runtime)
+      --compose-service=NAME Docker Compose service name (docker-compose runtime, default: app)
+      --test-command=CMD     Test command (default: php artisan test)
+      --force                Overwrite existing files
+      --project-dir=PATH     Project root (default: auto-detected)
+      --stubs-dir=PATH       Stubs directory (default: auto-detected from package)
+      --help                 Show this help
+
+    HELP);
+    exit(0);
+}
+
+$runtime = $opts['runtime'] ?? 'native';
+$force = isset($opts['force']);
+
+if (! in_array($runtime, $validRuntimes, true)) {
+    fwrite(STDERR, "Error: Invalid runtime '$runtime'. Use: " . implode(', ', $validRuntimes) . "\n");
+    exit(1);
+}
+
+$projectDir = $opts['project-dir'] ?? dirname(__DIR__);
+$stubsDir = $opts['stubs-dir'] ?? findStubsDir($projectDir);
+
+if ($stubsDir === null) {
+    fwrite(STDERR, "Error: Could not locate package stubs directory.\n");
+    fwrite(STDERR, "  Pass --stubs-dir=/path/to/vendor/laravel-worktree-isolation/laravel-worktree-isolation/stubs\n");
+    exit(1);
+}
+
+echo "Installing worktree isolation...\n\n";
+
+// 1. Verify git version
+if (! verifyGitVersion()) {
+    exit(1);
+}
+
+// 2. Publish scripts
+ensureDirectory("$projectDir/bin");
+publishFile("$stubsDir/bin/worktree-setup", "$projectDir/bin/worktree-setup", $force);
+publishFile("$stubsDir/bin/test", "$projectDir/bin/test", $force);
+publishFile("$stubsDir/bin/worktree-install", "$projectDir/bin/worktree-install", $force);
+publishFile("$stubsDir/bin/worktree-clean", "$projectDir/bin/worktree-clean", $force);
+
+// 3. Publish git hooks
+ensureDirectory("$projectDir/.githooks");
+publishFile(
+    "$stubsDir/githooks/post-checkout-worktree-setup.sh",
+    "$projectDir/.githooks/post-checkout-worktree-setup.sh",
+    $force
+);
+
+// 4. Make scripts executable
+foreach (['bin/worktree-setup', 'bin/test', 'bin/worktree-install', 'bin/worktree-clean'] as $script) {
+    $path = "$projectDir/$script";
+    if (file_exists($path)) {
+        chmod($path, 0755);
+    }
+}
+foreach (glob("$projectDir/.githooks/*.sh") as $hookScript) {
+    chmod($hookScript, 0755);
+}
+
+// 5. Create .worktree-isolation.env
+createEnvConfig($projectDir, $runtime, $opts, $force);
+
+// 6. Configure git hooks
+ensureGitHookConfig($projectDir);
+configureGitHooks($projectDir);
+
+echo "\nWorktree isolation installed and activated!\n\n";
+echo "What was done:\n";
+echo "  - Published scripts to bin/ and .githooks/\n";
+echo "  - Made all scripts executable\n";
+echo "  - Configured git to use .githooks.config\n";
+echo "  - Created .worktree-isolation.env (runtime: $runtime)\n\n";
+echo "Next steps:\n";
+echo "  1. Review .worktree-isolation.env and adjust if needed\n";
+echo "  2. Commit the published files\n";
+echo "  3. Other engineers just need to run: php bin/worktree-install (or php artisan worktree:install for Laravel)\n\n";
+
+exit(0);
+
+// ---------------------------------------------------------------------------
+// Functions
+// ---------------------------------------------------------------------------
+
+function findStubsDir(string $projectDir): ?string
+{
+    $candidates = [
+        "$projectDir/vendor/laravel-worktree-isolation/laravel-worktree-isolation/stubs",
+        dirname(__DIR__, 2) . '/stubs',
+        dirname(__DIR__) . '/stubs',
+    ];
+
+    foreach ($candidates as $dir) {
+        if (is_dir($dir) && file_exists("$dir/bin/test")) {
+            return realpath($dir);
+        }
+    }
+
+    return null;
+}
+
+function verifyGitVersion(): bool
+{
+    exec('git --version 2>&1', $output, $exitCode);
+
+    if ($exitCode !== 0) {
+        fwrite(STDERR, "Error: Could not determine git version. Is git installed?\n");
+        return false;
+    }
+
+    preg_match('/(\d+\.\d+)/', $output[0] ?? '', $matches);
+    $version = $matches[1] ?? '0.0';
+
+    if (version_compare($version, '2.54', '<')) {
+        fwrite(STDERR, "Error: Git 2.54+ is required for config-based hooks. You have Git $version.\n");
+        fwrite(STDERR, "  Upgrade with: brew upgrade git\n");
+        return false;
+    }
+
+    echo "  Git version: $version (OK)\n";
+    return true;
+}
+
+function ensureDirectory(string $path): void
+{
+    if (! is_dir($path)) {
+        mkdir($path, 0755, true);
+    }
+}
+
+function publishFile(string $from, string $to, bool $force): void
+{
+    if (file_exists($to) && ! $force) {
+        echo "  Skipping: $to (already exists, use --force to overwrite)\n";
+        return;
+    }
+
+    copy($from, $to);
+    echo "  Published: $to\n";
+}
+
+function createEnvConfig(string $projectDir, string $runtime, array $opts, bool $force): void
+{
+    $envFile = "$projectDir/.worktree-isolation.env";
+
+    if (file_exists($envFile) && ! $force) {
+        echo "  Skipping: .worktree-isolation.env (already exists)\n";
+        return;
+    }
+
+    $testCommand = $opts['test-command'] ?? '';
+
+    $lines = [
+        '# Worktree Isolation Configuration',
+        '# These values are used by bin/worktree-setup and bin/test',
+        '',
+        '# Runtime driver: native | docker-compose | docker-image',
+        "WORKTREE_RUNTIME=$runtime",
+    ];
+
+    if ($testCommand !== '') {
+        $lines[] = '';
+        $lines[] = "# Test command (default: php artisan test)";
+        $lines[] = "WORKTREE_TEST_COMMAND=$testCommand";
+    } else {
+        $lines[] = '';
+        $lines[] = '# Test command (default: php artisan test)';
+        $lines[] = '# WORKTREE_TEST_COMMAND=php vendor/bin/phpunit';
+    }
+
+    if ($runtime === 'docker-compose') {
+        $service = $opts['compose-service'] ?? 'app';
+        $lines[] = '';
+        $lines[] = '# docker-compose runtime settings';
+        $lines[] = "WORKTREE_COMPOSE_SERVICE=$service";
+        $lines[] = '# WORKTREE_COMPOSE_FILE=docker-compose.yml';
+    }
+
+    if ($runtime === 'docker-image') {
+        $image = $opts['docker-image'] ?? '';
+        $network = $opts['docker-network'] ?? '';
+
+        if ($image === '') {
+            echo "  Tip: Set WORKTREE_DOCKER_IMAGE in .worktree-isolation.env or pass --docker-image\n";
+        }
+        if ($network === '') {
+            echo "  Tip: Set WORKTREE_DOCKER_NETWORK in .worktree-isolation.env or pass --docker-network\n";
+        }
+
+        $lines[] = '';
+        $lines[] = '# docker-image runtime settings';
+        $lines[] = "WORKTREE_DOCKER_IMAGE=$image";
+        $lines[] = "WORKTREE_DOCKER_NETWORK=$network";
+        $lines[] = '# WORKTREE_DOCKER_WORKDIR=/var/www/html';
+    }
+
+    $lines[] = '';
+    $lines[] = '# Common settings';
+    $lines[] = 'WORKTREE_TESTING_ENV_FILE=.env.testing';
+    $lines[] = 'WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example';
+    $lines[] = 'WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE';
+    $lines[] = '';
+    $lines[] = '# Additional env vars to pass to the test container (space-separated, docker-image only)';
+    $lines[] = '# WORKTREE_EXTRA_ENV_VARS=';
+    $lines[] = '';
+
+    file_put_contents($envFile, implode("\n", $lines));
+    echo "  Created: .worktree-isolation.env\n";
+}
+
+function ensureGitHookConfig(string $projectDir): void
+{
+    $configFile = "$projectDir/.githooks.config";
+
+    $hookEntry = <<<'CONFIG'
+
+    [hook "worktree-setup"]
+        event = post-checkout
+        command = .githooks/post-checkout-worktree-setup.sh
+    CONFIG;
+
+    if (file_exists($configFile)) {
+        $content = file_get_contents($configFile);
+        if (str_contains($content, 'worktree-setup')) {
+            return;
+        }
+        file_put_contents($configFile, $content . "\n" . $hookEntry . "\n", FILE_APPEND);
+        echo "  Updated: .githooks.config (added worktree-setup hook)\n";
+    } else {
+        $header = <<<'CONFIG'
+        # Git Hooks Configuration
+        # Include this in your local git config:
+        #   git config --local include.path ../.githooks.config
+
+        CONFIG;
+        file_put_contents($configFile, $header . $hookEntry . "\n");
+        echo "  Created: .githooks.config\n";
+    }
+}
+
+function configureGitHooks(string $projectDir): void
+{
+    exec(
+        'cd ' . escapeshellarg($projectDir) . ' && git config --local include.path ../.githooks.config 2>&1',
+        $output,
+        $exitCode
+    );
+
+    if ($exitCode === 0) {
+        echo "  Configured: git include.path → .githooks.config\n";
+    } else {
+        echo "  Warning: Could not configure git hooks automatically.\n";
+        echo "  Run manually: git config --local include.path ../.githooks.config\n";
+    }
+}

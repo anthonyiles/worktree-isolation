@@ -2,10 +2,10 @@
 #
 # Bootstraps a git worktree with dependencies and environment files.
 #
-# Uses the pre-built Sail Docker image to run composer install and npm install,
-# so no host PHP or Node is required.
-#
-# Configuration is read from .worktree-isolation.env in the project root.
+# Supports three runtime drivers (set WORKTREE_RUNTIME in .worktree-isolation.env):
+#   native         — runs composer/npm directly on the host (Herd, Valet, etc.)
+#   docker-compose — runs via `docker compose exec` in a running service container
+#   docker-image   — runs via `docker run` with a standalone image (Sail, etc.)
 #
 # Usage (after creating a worktree):
 #   git worktree add ../worktrees/my-project/my-branch my-branch
@@ -28,19 +28,50 @@ if [[ -f "$CONF_FILE" ]]; then
     set +a
 fi
 
-IMAGE="${WORKTREE_DOCKER_IMAGE:-sail-8.4/app}"
+RUNTIME="${WORKTREE_RUNTIME:-native}"
 TESTING_ENV_FILE="${WORKTREE_TESTING_ENV_FILE:-.env.testing}"
 TESTING_ENV_EXAMPLE="${WORKTREE_TESTING_ENV_EXAMPLE:-.env.testing.example}"
 DB_PER_WORKTREE_KEY="${WORKTREE_DB_PER_WORKTREE_KEY:-TEST_DB_PER_WORKTREE}"
 
-# ---------------------------------------------------------------------------
-# 1. Verify Docker image exists
-# ---------------------------------------------------------------------------
-if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
-    echo "Error: Docker image '$IMAGE' not found." >&2
-    echo "Run 'vendor/bin/sail up -d' from the main repo at least once to build it." >&2
-    exit 1
+# docker-image driver settings
+IMAGE="${WORKTREE_DOCKER_IMAGE:-}"
+WORKDIR="${WORKTREE_DOCKER_WORKDIR:-/var/www/html}"
+
+# docker-compose driver settings
+COMPOSE_SERVICE="${WORKTREE_COMPOSE_SERVICE:-app}"
+COMPOSE_FILE_OPT=""
+if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
+    COMPOSE_FILE_OPT="-f $WORKTREE_COMPOSE_FILE"
 fi
+
+# ---------------------------------------------------------------------------
+# 1. Validate runtime and prerequisites
+# ---------------------------------------------------------------------------
+case "$RUNTIME" in
+    native)
+        ;;
+    docker-compose)
+        if ! docker compose version > /dev/null 2>&1; then
+            echo "Error: 'docker compose' not found. Install Docker with the Compose plugin." >&2
+            exit 1
+        fi
+        ;;
+    docker-image)
+        if [[ -z "$IMAGE" ]]; then
+            echo "Error: WORKTREE_DOCKER_IMAGE must be set for the docker-image runtime." >&2
+            exit 1
+        fi
+        if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "Error: Docker image '$IMAGE' not found." >&2
+            echo "Build it first (e.g. 'docker compose build' or 'vendor/bin/sail build')." >&2
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Error: Unknown WORKTREE_RUNTIME '$RUNTIME'. Use: native, docker-compose, or docker-image." >&2
+        exit 1
+        ;;
+esac
 
 # ---------------------------------------------------------------------------
 # 2. Resolve the main repo path from the worktree's .git file
@@ -110,24 +141,50 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "Installing Composer dependencies..."
-docker run --rm \
-    -v "$PROJECT_ROOT:/var/www/html" \
-    -w /var/www/html \
-    --entrypoint composer \
-    "$IMAGE" \
-    install --no-interaction --no-progress
+
+case "$RUNTIME" in
+    native)
+        composer install --no-interaction --no-progress
+        ;;
+    docker-compose)
+        # shellcheck disable=SC2086
+        docker compose $COMPOSE_FILE_OPT exec -T "$COMPOSE_SERVICE" \
+            composer install --no-interaction --no-progress
+        ;;
+    docker-image)
+        docker run --rm \
+            -v "$PROJECT_ROOT:$WORKDIR" \
+            -w "$WORKDIR" \
+            --entrypoint composer \
+            "$IMAGE" \
+            install --no-interaction --no-progress
+        ;;
+esac
 
 # ---------------------------------------------------------------------------
 # 5. Install npm dependencies
 # ---------------------------------------------------------------------------
 echo ""
 echo "Installing npm dependencies..."
-docker run --rm \
-    -v "$PROJECT_ROOT:/var/www/html" \
-    -w /var/www/html \
-    --entrypoint npm \
-    "$IMAGE" \
-    install --no-progress
+
+case "$RUNTIME" in
+    native)
+        npm install --no-progress
+        ;;
+    docker-compose)
+        # shellcheck disable=SC2086
+        docker compose $COMPOSE_FILE_OPT exec -T "$COMPOSE_SERVICE" \
+            npm install --no-progress
+        ;;
+    docker-image)
+        docker run --rm \
+            -v "$PROJECT_ROOT:$WORKDIR" \
+            -w "$WORKDIR" \
+            --entrypoint npm \
+            "$IMAGE" \
+            install --no-progress
+        ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Done
