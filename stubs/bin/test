@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+#
+# Runs PHPUnit tests inside a temporary Docker container that mounts the
+# current project root. This lets any git worktree run tests against the
+# shared Sail MySQL/Redis services without Sail needing to be started from
+# that worktree's directory.
+#
+# Configuration is read from .worktree-isolation.env in the project root.
+#
+# Usage:
+#   bin/test                        # run all tests
+#   bin/test --filter=testName      # forward args to artisan test
+#   bin/test --compact              # any artisan test flag works
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# ---------------------------------------------------------------------------
+# 0. Load configuration
+# ---------------------------------------------------------------------------
+CONF_FILE="$PROJECT_ROOT/.worktree-isolation.env"
+if [[ -f "$CONF_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$CONF_FILE"
+    set +a
+fi
+
+IMAGE="${WORKTREE_DOCKER_IMAGE:-sail-8.4/app}"
+NETWORK="${WORKTREE_DOCKER_NETWORK:-laravel_sail}"
+TESTING_ENV_FILE="${WORKTREE_TESTING_ENV_FILE:-.env.testing}"
+DB_PER_WORKTREE_KEY="${WORKTREE_DB_PER_WORKTREE_KEY:-TEST_DB_PER_WORKTREE}"
+RESOLVER_CLASS="${WORKTREE_RESOLVER_CLASS:-WorktreeIsolation\\TestDatabaseResolver}"
+
+# Verify the Sail image exists
+if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
+    echo "Error: Docker image '$IMAGE' not found." >&2
+    echo "Run 'vendor/bin/sail up -d' from the main repo at least once to build it." >&2
+    exit 1
+fi
+
+# Load testing env so we can read toggle flags and pass env vars to the container
+if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$PROJECT_ROOT/$TESTING_ENV_FILE"
+    set +a
+fi
+
+# Read configured env var names from config, or use defaults
+# These are the env vars forwarded into the Docker test container
+DEFAULT_ENV_VARS=(
+    APP_ENV APP_KEY APP_DEBUG
+    DB_CONNECTION DB_HOST DB_PORT DB_DATABASE DB_USERNAME DB_PASSWORD DB_SSL_VERIFY_SERVER_CERT
+    BCRYPT_ROUNDS CACHE_DRIVER MAIL_MAILER QUEUE_CONNECTION SESSION_DRIVER
+    TELESCOPE_ENABLED
+    "$DB_PER_WORKTREE_KEY"
+)
+
+# Allow project to extend via WORKTREE_EXTRA_ENV_VARS (space-separated)
+IFS=' ' read -ra EXTRA_VARS <<< "${WORKTREE_EXTRA_ENV_VARS:-}"
+ENV_VARS=("${DEFAULT_ENV_VARS[@]}" "${EXTRA_VARS[@]}")
+
+DOCKER_ARGS=(
+    docker run --rm
+    -v "$PROJECT_ROOT:/var/www/html"
+    -w /var/www/html
+    --network "$NETWORK"
+)
+
+for var in "${ENV_VARS[@]}"; do
+    if [[ -n "${!var:-}" ]]; then
+        DOCKER_ARGS+=(-e "$var=${!var}")
+    fi
+done
+
+# When per-worktree DB is enabled, derive a per-worktree database name
+# and ensure it exists before running the tests.
+if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ ]]; then
+    WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
+    DOCKER_ARGS+=(-e "WORKTREE_BASENAME=$WORKTREE_BASENAME")
+
+    exec "${DOCKER_ARGS[@]}" --entrypoint bash "$IMAGE" -c '
+        php -r '\''
+            require "/var/www/html/vendor/autoload.php";
+            $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
+            $base = getenv("DB_DATABASE") ?: "testing";
+            $wt   = getenv("WORKTREE_BASENAME") ?: "worktree";
+            $name = $class::derive($base, $wt);
+            $class::ensureExists(
+                $name,
+                getenv("DB_HOST") ?: "127.0.0.1",
+                (int) (getenv("DB_PORT") ?: 3306),
+                getenv("DB_USERNAME") ?: "",
+                getenv("DB_PASSWORD") ?: "",
+            );
+            echo "Using test database: $name\n";
+            file_put_contents("/tmp/.test_db_name", $name);
+        '\'' && \
+        export DB_DATABASE="$(cat /tmp/.test_db_name)" && \
+        php artisan test "$@"
+    ' -- "$@"
+else
+    exec "${DOCKER_ARGS[@]}" --entrypoint php "$IMAGE" artisan test "$@"
+fi

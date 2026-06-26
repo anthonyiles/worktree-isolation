@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+#
+# Bootstraps a git worktree with dependencies and environment files.
+#
+# Uses the pre-built Sail Docker image to run composer install and npm install,
+# so no host PHP or Node is required.
+#
+# Configuration is read from .worktree-isolation.env in the project root.
+#
+# Usage (after creating a worktree):
+#   git worktree add ../worktrees/my-project/my-branch my-branch
+#   cd ../worktrees/my-project/my-branch
+#   bin/worktree-setup
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# ---------------------------------------------------------------------------
+# 0. Load configuration
+# ---------------------------------------------------------------------------
+CONF_FILE="$PROJECT_ROOT/.worktree-isolation.env"
+if [[ -f "$CONF_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$CONF_FILE"
+    set +a
+fi
+
+IMAGE="${WORKTREE_DOCKER_IMAGE:-sail-8.4/app}"
+TESTING_ENV_FILE="${WORKTREE_TESTING_ENV_FILE:-.env.testing}"
+TESTING_ENV_EXAMPLE="${WORKTREE_TESTING_ENV_EXAMPLE:-.env.testing.example}"
+DB_PER_WORKTREE_KEY="${WORKTREE_DB_PER_WORKTREE_KEY:-TEST_DB_PER_WORKTREE}"
+
+# ---------------------------------------------------------------------------
+# 1. Verify Docker image exists
+# ---------------------------------------------------------------------------
+if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
+    echo "Error: Docker image '$IMAGE' not found." >&2
+    echo "Run 'vendor/bin/sail up -d' from the main repo at least once to build it." >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Resolve the main repo path from the worktree's .git file
+# ---------------------------------------------------------------------------
+MAIN_REPO=""
+
+if [[ -f "$PROJECT_ROOT/.git" ]]; then
+    GITDIR="$(sed 's/^gitdir: //' "$PROJECT_ROOT/.git")"
+
+    if [[ -d "$GITDIR" ]]; then
+        MAIN_REPO="$(cd "$GITDIR/../../.." && pwd)"
+
+        if [[ ! -d "$MAIN_REPO/.git" ]]; then
+            echo "Warning: Could not resolve main repo from '$GITDIR'. Skipping .env copy." >&2
+            MAIN_REPO=""
+        fi
+    fi
+elif [[ -d "$PROJECT_ROOT/.git" ]]; then
+    echo "This directory is the main repo, not a worktree. Nothing to set up." >&2
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Copy .env files from the main repo if they don't exist here
+# ---------------------------------------------------------------------------
+if [[ -n "$MAIN_REPO" ]]; then
+    # .env
+    if [[ ! -f "$PROJECT_ROOT/.env" && -f "$MAIN_REPO/.env" ]]; then
+        cp "$MAIN_REPO/.env" "$PROJECT_ROOT/.env"
+        echo "Copied .env from main repo."
+    elif [[ -f "$PROJECT_ROOT/.env" ]]; then
+        echo ".env already exists, skipping."
+    else
+        echo "Warning: .env not found in main repo either." >&2
+    fi
+
+    # Testing env file — fall back to example if needed
+    if [[ ! -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
+        if [[ -f "$MAIN_REPO/$TESTING_ENV_FILE" ]]; then
+            cp "$MAIN_REPO/$TESTING_ENV_FILE" "$PROJECT_ROOT/$TESTING_ENV_FILE"
+            echo "Copied $TESTING_ENV_FILE from main repo."
+        elif [[ -f "$MAIN_REPO/$TESTING_ENV_EXAMPLE" ]]; then
+            cp "$MAIN_REPO/$TESTING_ENV_EXAMPLE" "$PROJECT_ROOT/$TESTING_ENV_FILE"
+            echo "Copied $TESTING_ENV_FILE from $TESTING_ENV_EXAMPLE."
+        else
+            echo "Warning: $TESTING_ENV_FILE not found in main repo." >&2
+        fi
+    else
+        echo "$TESTING_ENV_FILE already exists, skipping."
+    fi
+
+    # Worktrees must use per-worktree test databases to avoid conflicts
+    if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
+        if grep -q "^${DB_PER_WORKTREE_KEY}=" "$PROJECT_ROOT/$TESTING_ENV_FILE"; then
+            sed -i '' "s/^${DB_PER_WORKTREE_KEY}=.*/${DB_PER_WORKTREE_KEY}=true/" "$PROJECT_ROOT/$TESTING_ENV_FILE"
+        else
+            echo "${DB_PER_WORKTREE_KEY}=true" >> "$PROJECT_ROOT/$TESTING_ENV_FILE"
+        fi
+        echo "Enabled ${DB_PER_WORKTREE_KEY}=true for this worktree."
+    fi
+else
+    echo "Warning: Could not find main repo. Copy .env and $TESTING_ENV_FILE manually." >&2
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Install Composer dependencies
+# ---------------------------------------------------------------------------
+echo ""
+echo "Installing Composer dependencies..."
+docker run --rm \
+    -v "$PROJECT_ROOT:/var/www/html" \
+    -w /var/www/html \
+    --entrypoint composer \
+    "$IMAGE" \
+    install --no-interaction --no-progress
+
+# ---------------------------------------------------------------------------
+# 5. Install npm dependencies
+# ---------------------------------------------------------------------------
+echo ""
+echo "Installing npm dependencies..."
+docker run --rm \
+    -v "$PROJECT_ROOT:/var/www/html" \
+    -w /var/www/html \
+    --entrypoint npm \
+    "$IMAGE" \
+    install --no-progress
+
+# ---------------------------------------------------------------------------
+# Done
+# ---------------------------------------------------------------------------
+echo ""
+echo "Worktree setup complete. You can now run tests with: bin/test"
