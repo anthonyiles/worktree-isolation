@@ -22,7 +22,7 @@ This package automates all of that. After installation, every `git worktree add`
 ## Installation
 
 ```bash
-composer require anthonyiles/laravel-worktree-isolation --dev
+composer require anthonyiles/worktree-isolation --dev
 ```
 
 Then run the install script with your preferred runtime:
@@ -30,7 +30,7 @@ Then run the install script with your preferred runtime:
 ### Any PHP Project
 
 ```bash
-php vendor/anthonyiles/laravel-worktree-isolation/stubs/bin/worktree-install
+php vendor/anthonyiles/worktree-isolation/stubs/bin/worktree-install
 ```
 
 After the first install, re-runs are simpler since scripts are published to `bin/`:

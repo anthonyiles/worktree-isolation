@@ -1,5 +1,5 @@
 {
-    "name": "anthonyiles/laravel-worktree-isolation",
+    "name": "anthonyiles/worktree-isolation",
     "description": "Per-worktree test database isolation and bootstrap automation for PHP projects.",
     "keywords": ["worktree", "testing", "isolation", "docker", "docker-compose", "laravel", "herd", "valet", "phpunit"],
     "license": "MIT",

@@ -3,7 +3,7 @@
   "packages": {
     ".": {
       "release-type": "simple",
-      "package-name": "laravel-worktree-isolation"
+      "package-name": "worktree-isolation"
     }
   }
 }

@@ -62,7 +62,7 @@ $stubsDir = $opts['stubs-dir'] ?? findStubsDir($projectDir);
 
 if ($stubsDir === null) {
     fwrite(STDERR, "Error: Could not locate package stubs directory.\n");
-    fwrite(STDERR, "  Pass --stubs-dir=/path/to/vendor/anthonyiles/laravel-worktree-isolation/stubs\n");
+    fwrite(STDERR, "  Pass --stubs-dir=/path/to/vendor/anthonyiles/worktree-isolation/stubs\n");
     exit(1);
 }
 
@@ -126,7 +126,7 @@ exit(0);
 function findStubsDir(string $projectDir): ?string
 {
     $candidates = [
-        "$projectDir/vendor/anthonyiles/laravel-worktree-isolation/stubs",
+        "$projectDir/vendor/anthonyiles/worktree-isolation/stubs",
         dirname(__DIR__, 2) . '/stubs',
         dirname(__DIR__) . '/stubs',
     ];
