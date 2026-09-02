@@ -19,6 +19,14 @@
             "WorktreeIsolation\\": "src/"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "WorktreeIsolation\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
     "bin": [
         "stubs/bin/worktree-install",
         "stubs/bin/worktree-setup",
