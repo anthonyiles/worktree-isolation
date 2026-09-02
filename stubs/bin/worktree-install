@@ -103,19 +103,20 @@ foreach (glob("$projectDir/.githooks/*.sh") as $hookScript) {
 createEnvConfig($projectDir, $runtime, $opts, $force);
 
 // 6. Configure git hooks
-ensureGitHookConfig($projectDir);
 configureGitHooks($projectDir);
 
 echo "\nWorktree isolation installed and activated!\n\n";
 echo "What was done:\n";
 echo "  - Published scripts to bin/ and .githooks/\n";
 echo "  - Made all scripts executable\n";
-echo "  - Configured git to use .githooks.config\n";
+echo "  - Configured git hook.worktree-setup.command/event (local, this clone only)\n";
 echo "  - Created .worktree-isolation.env (runtime: $runtime)\n\n";
 echo "Next steps:\n";
 echo "  1. Review .worktree-isolation.env and adjust if needed\n";
-echo "  2. Commit the published files\n";
-echo "  3. Other engineers just need to run: php bin/worktree-install (or php artisan worktree:install for Laravel)\n\n";
+echo "  2. Commit the published files (bin/, .githooks/, .worktree-isolation.env)\n";
+echo "  3. Other engineers just need to run: php bin/worktree-install (or php artisan worktree:install for Laravel)\n";
+echo "     once per clone — this activates the hook locally and works for worktrees on any branch,\n";
+echo "     not just branches that already have .githooks/ committed.\n\n";
 
 exit(0);
 
@@ -249,48 +250,31 @@ function createEnvConfig(string $projectDir, string $runtime, array $opts, bool 
     echo "  Created: .worktree-isolation.env\n";
 }
 
-function ensureGitHookConfig(string $projectDir): void
-{
-    $configFile = "$projectDir/.githooks.config";
-
-    $hookEntry = <<<'CONFIG'
-
-    [hook "worktree-setup"]
-        event = post-checkout
-        command = .githooks/post-checkout-worktree-setup.sh
-    CONFIG;
-
-    if (file_exists($configFile)) {
-        $content = file_get_contents($configFile);
-        if (str_contains($content, 'worktree-setup')) {
-            return;
-        }
-        file_put_contents($configFile, $content . "\n" . $hookEntry . "\n", FILE_APPEND);
-        echo "  Updated: .githooks.config (added worktree-setup hook)\n";
-    } else {
-        $header = <<<'CONFIG'
-        # Git Hooks Configuration
-        # Include this in your local git config:
-        #   git config --local include.path ../.githooks.config
-
-        CONFIG;
-        file_put_contents($configFile, $header . $hookEntry . "\n");
-        echo "  Created: .githooks.config\n";
-    }
-}
-
 function configureGitHooks(string $projectDir): void
 {
+    // The command must be an absolute path: git resolves a relative
+    // hook.*.command against the cwd of whatever worktree is running the
+    // hook (the *new* worktree, for post-checkout) — not against the main
+    // repo. A relative path here would only work once the referenced
+    // script had been committed and merged into every branch anyone
+    // creates a worktree from. Resolving it to an absolute path once,
+    // at install time, avoids that entirely.
+    $hookScript = "$projectDir/.githooks/post-checkout-worktree-setup.sh";
+
     exec(
-        'cd ' . escapeshellarg($projectDir) . ' && git config --local include.path ../.githooks.config 2>&1',
+        'cd ' . escapeshellarg($projectDir)
+            . ' && git config --local hook.worktree-setup.command ' . escapeshellarg($hookScript)
+            . ' && git config --local --replace-all hook.worktree-setup.event post-checkout 2>&1',
         $output,
         $exitCode
     );
 
     if ($exitCode === 0) {
-        echo "  Configured: git include.path → .githooks.config\n";
+        echo "  Configured: hook.worktree-setup.command/event (local git config)\n";
     } else {
         echo "  Warning: Could not configure git hooks automatically.\n";
-        echo "  Run manually: git config --local include.path ../.githooks.config\n";
+        echo "  Run manually:\n";
+        echo '    git config --local hook.worktree-setup.command ' . escapeshellarg($hookScript) . "\n";
+        echo "    git config --local --replace-all hook.worktree-setup.event post-checkout\n";
     }
 }

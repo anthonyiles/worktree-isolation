@@ -93,8 +93,7 @@ The install command does everything:
 - Publishes `bin/worktree-setup`, `bin/test`, `bin/worktree-install`, and `bin/worktree-clean` scripts
 - Publishes the post-checkout git hook to `.githooks/`
 - Makes all scripts executable
-- Creates/updates `.githooks.config` with the hook registration
-- Configures `git config --local` to use the hooks
+- Registers the hook locally via `git config --local hook.worktree-setup.command`/`event`, pointing at the absolute path of `.githooks/post-checkout-worktree-setup.sh` in this clone
 - Creates `.worktree-isolation.env` with your runtime settings
 
 ### For other engineers
@@ -107,6 +106,8 @@ php bin/worktree-install
 ```
 
 The command is idempotent and handles everything.
+
+Hook activation is local to that clone (`git config --local`), so each engineer runs this once per clone — same as any git-hooks tool (Husky, pre-commit, etc.), since git never auto-trusts hooks from a fresh clone. It is **not** tied to any branch: because the hook command is registered as an absolute path resolved at install time, worktrees created from any branch — including ones that never had `.githooks/` committed — get bootstrapped automatically. You don't need to merge the hook into every branch you plan to `git worktree add` from.
 
 ## How It Works
 
