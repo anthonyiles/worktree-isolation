@@ -10,10 +10,10 @@ declare(strict_types=1);
  * Laravel projects can also use `php artisan worktree:install` which delegates here.
  *
  * Usage:
- *   php bin/worktree-install
- *   php bin/worktree-install --runtime=docker-compose --compose-service=app
- *   php bin/worktree-install --runtime=docker-image --docker-image=myapp --docker-network=mynet
- *   php bin/worktree-install --force
+ *   vendor/bin/worktree-install
+ *   vendor/bin/worktree-install --runtime=docker-compose --compose-service=app
+ *   vendor/bin/worktree-install --runtime=docker-image --docker-image=myapp --docker-network=mynet
+ *   vendor/bin/worktree-install --force
  */
 
 $validRuntimes = ['native', 'docker-compose', 'docker-image'];
@@ -32,7 +32,7 @@ $opts = getopt('', [
 
 if (isset($opts['help'])) {
     fwrite(STDOUT, <<<HELP
-    Usage: php bin/worktree-install [OPTIONS]
+    Usage: vendor/bin/worktree-install [OPTIONS]
 
     Options:
       --runtime=DRIVER       Runtime driver: native (default), docker-compose, docker-image
@@ -57,7 +57,7 @@ if (! in_array($runtime, $validRuntimes, true)) {
     exit(1);
 }
 
-$projectDir = $opts['project-dir'] ?? dirname(__DIR__);
+$projectDir = $opts['project-dir'] ?? resolveProjectRoot();
 $stubsDir = $opts['stubs-dir'] ?? findStubsDir($projectDir);
 
 if ($stubsDir === null) {
@@ -73,56 +73,44 @@ if (! verifyGitVersion()) {
     exit(1);
 }
 
-// 2. Publish scripts
-ensureDirectory("$projectDir/bin");
-publishFile("$stubsDir/bin/worktree-setup", "$projectDir/bin/worktree-setup", $force);
-publishFile("$stubsDir/bin/test", "$projectDir/bin/test", $force);
-publishFile("$stubsDir/bin/worktree-install", "$projectDir/bin/worktree-install", $force);
-publishFile("$stubsDir/bin/worktree-clean", "$projectDir/bin/worktree-clean", $force);
-
-// 3. Publish git hooks
-ensureDirectory("$projectDir/.githooks");
-publishFile(
-    "$stubsDir/githooks/post-checkout-worktree-setup.sh",
-    "$projectDir/.githooks/post-checkout-worktree-setup.sh",
-    $force
-);
-
-// 4. Make scripts executable
-foreach (['bin/worktree-setup', 'bin/test', 'bin/worktree-install', 'bin/worktree-clean'] as $script) {
-    $path = "$projectDir/$script";
-    if (file_exists($path)) {
-        chmod($path, 0755);
-    }
-}
-foreach (glob("$projectDir/.githooks/*.sh") as $hookScript) {
-    chmod($hookScript, 0755);
-}
-
-// 5. Create .worktree-isolation.env
+// 2. Create .worktree-isolation.env — the only file this installer writes
+// into the project. Everything else (worktree-setup, test, worktree-clean,
+// worktree-install, the post-checkout hook) is run straight out of vendor/,
+// so it always matches the installed package version and never drifts.
+// worktree-setup, test, worktree-clean, and worktree-install are available
+// via vendor/bin/ automatically, courtesy of Composer's "bin" declaration.
 createEnvConfig($projectDir, $runtime, $opts, $force);
 
-// 6. Configure git hooks
-configureGitHooks($projectDir);
+// 3. Configure git hooks
+configureGitHooks($projectDir, $stubsDir);
 
 echo "\nWorktree isolation installed and activated!\n\n";
 echo "What was done:\n";
-echo "  - Published scripts to bin/ and .githooks/\n";
-echo "  - Made all scripts executable\n";
+echo "  - Created .worktree-isolation.env (runtime: $runtime)\n";
 echo "  - Configured git hook.worktree-setup.command/event (local, this clone only)\n";
-echo "  - Created .worktree-isolation.env (runtime: $runtime)\n\n";
+echo "    pointing at the vendor copy of the post-checkout hook\n\n";
 echo "Next steps:\n";
 echo "  1. Review .worktree-isolation.env and adjust if needed\n";
-echo "  2. Commit the published files (bin/, .githooks/, .worktree-isolation.env)\n";
-echo "  3. Other engineers just need to run: php bin/worktree-install (or php artisan worktree:install for Laravel)\n";
+echo "  2. Commit .worktree-isolation.env\n";
+echo "  3. Other engineers just need to run: vendor/bin/worktree-install (or php artisan worktree:install for Laravel)\n";
 echo "     once per clone — this activates the hook locally and works for worktrees on any branch,\n";
-echo "     not just branches that already have .githooks/ committed.\n\n";
+echo "     including branches that predate this package being added.\n\n";
 
 exit(0);
 
 // ---------------------------------------------------------------------------
 // Functions
 // ---------------------------------------------------------------------------
+
+function resolveProjectRoot(): string
+{
+    // Not based on this script's own location: it runs from vendor/bin/
+    // (a Composer-managed symlink), which tells you nothing about which
+    // project it's installing into.
+    $toplevel = trim((string) shell_exec('git rev-parse --show-toplevel 2>/dev/null'));
+
+    return $toplevel !== '' ? $toplevel : getcwd();
+}
 
 function findStubsDir(string $projectDir): ?string
 {
@@ -163,24 +151,6 @@ function verifyGitVersion(): bool
     return true;
 }
 
-function ensureDirectory(string $path): void
-{
-    if (! is_dir($path)) {
-        mkdir($path, 0755, true);
-    }
-}
-
-function publishFile(string $from, string $to, bool $force): void
-{
-    if (file_exists($to) && ! $force) {
-        echo "  Skipping: $to (already exists, use --force to overwrite)\n";
-        return;
-    }
-
-    copy($from, $to);
-    echo "  Published: $to\n";
-}
-
 function createEnvConfig(string $projectDir, string $runtime, array $opts, bool $force): void
 {
     $envFile = "$projectDir/.worktree-isolation.env";
@@ -194,7 +164,7 @@ function createEnvConfig(string $projectDir, string $runtime, array $opts, bool 
 
     $lines = [
         '# Worktree Isolation Configuration',
-        '# These values are used by bin/worktree-setup and bin/test',
+        '# These values are used by vendor/bin/worktree-setup and vendor/bin/test',
         '',
         '# Runtime driver: native | docker-compose | docker-image',
         "WORKTREE_RUNTIME=$runtime",
@@ -250,16 +220,14 @@ function createEnvConfig(string $projectDir, string $runtime, array $opts, bool 
     echo "  Created: .worktree-isolation.env\n";
 }
 
-function configureGitHooks(string $projectDir): void
+function configureGitHooks(string $projectDir, string $stubsDir): void
 {
     // The command must be an absolute path: git resolves a relative
     // hook.*.command against the cwd of whatever worktree is running the
     // hook (the *new* worktree, for post-checkout) — not against the main
-    // repo. A relative path here would only work once the referenced
-    // script had been committed and merged into every branch anyone
-    // creates a worktree from. Resolving it to an absolute path once,
-    // at install time, avoids that entirely.
-    $hookScript = "$projectDir/.githooks/post-checkout-worktree-setup.sh";
+    // repo. It points straight at the vendor copy — nothing is published
+    // into the project, so there's nothing to keep in sync on upgrade.
+    $hookScript = "$stubsDir/githooks/post-checkout-worktree-setup.sh";
 
     exec(
         'cd ' . escapeshellarg($projectDir)

@@ -12,13 +12,19 @@
         "orchestra/testbench": "^9.0|^10.0"
     },
     "suggest": {
-        "illuminate/support": "Required for artisan commands (worktree:install, worktree:clean). Not needed if using the standalone bin/ scripts."
+        "illuminate/support": "Required for artisan commands (worktree:install, worktree:clean). Not needed if using the standalone vendor/bin/ scripts."
     },
     "autoload": {
         "psr-4": {
             "WorktreeIsolation\\": "src/"
         }
     },
+    "bin": [
+        "stubs/bin/worktree-install",
+        "stubs/bin/worktree-setup",
+        "stubs/bin/test",
+        "stubs/bin/worktree-clean"
+    ],
     "extra": {
         "laravel": {
             "providers": [

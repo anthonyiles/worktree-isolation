@@ -21,99 +21,148 @@ This package automates all of that. After installation, every `git worktree add`
 
 ## Installation
 
+Every scenario starts the same way:
+
 ```bash
 composer require anthonyiles/worktree-isolation --dev
 ```
 
-Then run the install script with your preferred runtime:
+This installs three commands under `vendor/bin/` — `worktree-install`, `worktree-setup`, `test`, `worktree-clean` — kept in sync automatically by Composer. Nothing is copied into your project except the config file you choose to write (below). Laravel projects can swap `vendor/bin/worktree-install` for `php artisan worktree:install` in any scenario below — same flags, `artisan` just delegates to the same installer.
 
-### Any PHP Project
+Then pick the section that matches your setup:
+
+- [Native PHP](#native-php) — Herd, Valet, or any local PHP/Node install
+- [Docker Compose](#docker-compose) — a service running via `docker compose up -d`
+- [Laravel Sail](#laravel-sail) — Sail, or any other standalone Docker image
+
+---
+
+### Native PHP
+
+For Herd, Valet, or any setup where `composer`, `npm`, and your test runner already run directly on the host.
 
 ```bash
-php vendor/anthonyiles/worktree-isolation/stubs/bin/worktree-install
+vendor/bin/worktree-install
+# or: php artisan worktree:install  (Laravel projects)
 ```
 
-After the first install, re-runs are simpler since scripts are published to `bin/`:
+This is the default runtime, so no `--runtime` flag is needed. It writes `.worktree-isolation.env`:
 
-```bash
-php bin/worktree-install
+```env
+# Runtime driver: native | docker-compose | docker-image
+WORKTREE_RUNTIME=native
+
+# Test command (default: php artisan test)
+# WORKTREE_TEST_COMMAND=php vendor/bin/phpunit
+
+# Common settings
+WORKTREE_TESTING_ENV_FILE=.env.testing
+WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
+WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
 ```
 
-### Laravel Projects
+Non-Laravel projects should also set `WORKTREE_TEST_COMMAND` — see [Custom Test Command](#custom-test-command).
 
-Laravel projects get artisan integration automatically:
+---
 
-```bash
-php artisan worktree:install
-```
+### Docker Compose
 
-### Runtime Options
-
-All install paths accept the same runtime options:
-
-**Native PHP** (default — Herd, Valet, local PHP):
+For projects where the app runs as a service in `docker-compose.yml`, started with `docker compose up -d`.
 
 ```bash
-php bin/worktree-install
-# or: php artisan worktree:install
-```
-
-**Docker Compose:**
-
-```bash
-php bin/worktree-install --runtime=docker-compose --compose-service=app
+vendor/bin/worktree-install --runtime=docker-compose --compose-service=app
 # or: php artisan worktree:install --runtime=docker-compose --compose-service=app
 ```
 
-**Docker Image** (Sail or standalone):
+`--compose-service` should match the service name in your `docker-compose.yml` that has PHP, Composer, and Node available (default: `app`). This writes:
+
+```env
+WORKTREE_RUNTIME=docker-compose
+
+# Test command (default: php artisan test)
+# WORKTREE_TEST_COMMAND=php vendor/bin/phpunit
+
+# docker-compose runtime settings
+WORKTREE_COMPOSE_SERVICE=app
+# WORKTREE_COMPOSE_FILE=docker-compose.yml
+
+# Common settings
+WORKTREE_TESTING_ENV_FILE=.env.testing
+WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
+WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
+```
+
+`composer install`, `npm install`, and your test command all run via `docker compose exec -T`, so the compose stack must already be up when you run `git worktree add` or `vendor/bin/test`.
+
+---
+
+### Laravel Sail
+
+Sail is just Laravel's name for a pre-built Docker image, so it uses the `docker-image` runtime — this also covers any other standalone Docker image (non-Sail) the same way, just with different `--docker-image`/`--docker-network` values.
 
 ```bash
-php bin/worktree-install --runtime=docker-image --docker-image="myapp" --docker-network="myapp_default"
+vendor/bin/worktree-install --runtime=docker-image --docker-image="sail-8.5/app" --docker-network="myproject_sail"
 # or: php artisan worktree:install --runtime=docker-image --docker-image="sail-8.5/app" --docker-network="myproject_sail"
 ```
 
-### Custom Test Command
+- `--docker-image` — the image Sail already built (check with `docker images`, or see `vendor/bin/sail` config; typically `<project>-<php-version>/app`)
+- `--docker-network` — the Docker network Sail's containers (including MySQL) run on, so the ephemeral test container can reach them (typically `<project>_sail`)
 
-By default, tests run via `php artisan test`. For non-Laravel projects, set a custom test command:
+This writes:
 
-```bash
-php bin/worktree-install --test-command="php vendor/bin/phpunit"
+```env
+WORKTREE_RUNTIME=docker-image
+
+# Test command (default: php artisan test)
+# WORKTREE_TEST_COMMAND=php vendor/bin/phpunit
+
+# docker-image runtime settings
+WORKTREE_DOCKER_IMAGE=sail-8.5/app
+WORKTREE_DOCKER_NETWORK=myproject_sail
+# WORKTREE_DOCKER_WORKDIR=/var/www/html
+
+# Common settings
+WORKTREE_TESTING_ENV_FILE=.env.testing
+WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
+WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
 ```
 
-Or set `WORKTREE_TEST_COMMAND` in `.worktree-isolation.env`:
+`composer install`, `npm install`, and your test command each run via a throwaway `docker run --rm` against that image, attached to the given network — the image must already be built (`vendor/bin/sail build`, or `docker compose build` for a non-Sail standalone image).
+
+---
+
+### Custom Test Command
+
+By default, tests run via `php artisan test`. For non-Laravel projects (in any of the scenarios above), set a custom test command:
+
+```bash
+vendor/bin/worktree-install --test-command="php vendor/bin/phpunit"
+```
+
+Or set `WORKTREE_TEST_COMMAND` directly in `.worktree-isolation.env`:
 
 ```env
 WORKTREE_TEST_COMMAND=php vendor/bin/phpunit
 ```
 
----
+### For Other Engineers
 
-The install command does everything:
-- Verifies Git 2.54+ is installed
-- Publishes `bin/worktree-setup`, `bin/test`, `bin/worktree-install`, and `bin/worktree-clean` scripts
-- Publishes the post-checkout git hook to `.githooks/`
-- Makes all scripts executable
-- Registers the hook locally via `git config --local hook.worktree-setup.command`/`event`, pointing at the absolute path of `.githooks/post-checkout-worktree-setup.sh` in this clone
-- Creates `.worktree-isolation.env` with your runtime settings
-
-### For other engineers
-
-After pulling the branch, each engineer just runs:
+After pulling a branch that has `.worktree-isolation.env` committed, each engineer just runs:
 
 ```bash
-php bin/worktree-install
+vendor/bin/worktree-install
 # or: php artisan worktree:install  (Laravel projects)
 ```
 
-The command is idempotent and handles everything.
+The command is idempotent — it detects the existing `.worktree-isolation.env` and only (re)configures the git hook.
 
-Hook activation is local to that clone (`git config --local`), so each engineer runs this once per clone — same as any git-hooks tool (Husky, pre-commit, etc.), since git never auto-trusts hooks from a fresh clone. It is **not** tied to any branch: because the hook command is registered as an absolute path resolved at install time, worktrees created from any branch — including ones that never had `.githooks/` committed — get bootstrapped automatically. You don't need to merge the hook into every branch you plan to `git worktree add` from.
+Hook activation is local to that clone (`git config --local`), so each engineer runs this once per clone — same as any git-hooks tool (Husky, pre-commit, etc.), since git never auto-trusts hooks from a fresh clone. It is **not** tied to any branch: because the hook command is registered as an absolute path resolved at install time, worktrees created from any branch — including ones that never had this package's config committed — get bootstrapped automatically. You don't need to merge anything hook-related into every branch you plan to `git worktree add` from.
 
 ## How It Works
 
 ### Automatic Worktree Bootstrap
 
-When you run `git worktree add`, the `post-checkout` hook detects the new worktree and runs `bin/worktree-setup`, which:
+When you run `git worktree add`, the `post-checkout` hook detects the new worktree and runs `worktree-setup` (straight out of `vendor/`), which:
 
 1. Copies `.env` from the main repo
 2. Copies `.env.testing` (or falls back to `.env.testing.example`)
@@ -123,7 +172,7 @@ When you run `git worktree add`, the `post-checkout` hook detects the new worktr
 
 ### Per-Worktree Test Databases
 
-When `TEST_DB_PER_WORKTREE=true`, `bin/test` derives a unique database name from the worktree directory:
+When `TEST_DB_PER_WORKTREE=true`, `vendor/bin/test` derives a unique database name from the worktree directory:
 
 ```
 testing-{worktree-folder-name}
@@ -138,9 +187,9 @@ The database is created automatically on first test run. A safety guard ensures 
 From any worktree:
 
 ```bash
-bin/test                              # run all tests
-bin/test --filter=MyTest              # filter tests
-bin/test tests/Feature/MyTest.php     # specific file
+vendor/bin/test                              # run all tests
+vendor/bin/test --filter=MyTest              # filter tests
+vendor/bin/test tests/Feature/MyTest.php     # specific file
 ```
 
 ### Cleaning Up
@@ -148,7 +197,7 @@ bin/test tests/Feature/MyTest.php     # specific file
 Drop all per-worktree test databases:
 
 ```bash
-php bin/worktree-clean
+vendor/bin/worktree-clean
 # or: php artisan worktree:clean  (Laravel projects)
 ```
 
@@ -164,9 +213,9 @@ This lists all databases matching the `{base}-*` pattern and asks for confirmati
 | `docker-compose` | Docker Compose projects | Running `docker compose up -d` |
 | `docker-image` | Sail or standalone Docker image | Pre-built Docker image |
 
-### `.worktree-isolation.env`
+### `.worktree-isolation.env` (full reference)
 
-Project-level configuration (committed to repo):
+Project-level configuration (committed to repo). The scenario sections above show the subset of these that matter for each runtime — this is the complete list:
 
 ```env
 # Runtime driver: native | docker-compose | docker-image
@@ -203,14 +252,16 @@ php artisan vendor:publish --tag=worktree-isolation-config
 
 This creates `config/worktree-isolation.php` which mirrors the `.worktree-isolation.env` settings through Laravel's config system.
 
-## Published Scripts
+## Available Commands
 
-| Script | Purpose |
+All installed via Composer's `bin` mechanism — `vendor/bin/*` always matches the installed package version, nothing to republish on upgrade.
+
+| Command | Purpose |
 |---|---|
-| `bin/test` | Run tests with per-worktree database isolation |
-| `bin/worktree-setup` | Bootstrap a worktree (env files, dependencies) |
-| `bin/worktree-install` | Install/configure worktree isolation (no framework needed) |
-| `bin/worktree-clean` | Drop per-worktree test databases (no framework needed) |
+| `vendor/bin/test` | Run tests with per-worktree database isolation |
+| `vendor/bin/worktree-setup` | Bootstrap a worktree (env files, dependencies) — normally run automatically by the git hook |
+| `vendor/bin/worktree-install` | Install/configure worktree isolation (no framework needed) |
+| `vendor/bin/worktree-clean` | Drop per-worktree test databases (no framework needed) |
 
 ## AI Agent Integration
 
@@ -218,8 +269,8 @@ Add this to your project's cursor rules or AGENTS.md:
 
 ```markdown
 **Worktrees:** If the working directory is a git worktree (`.git` is a file, not a directory),
-you **must** use `bin/test` instead of your usual test command. The `bin/test` script handles
-per-worktree database isolation and runtime dispatch.
+you **must** use `vendor/bin/test` instead of your usual test command. It handles per-worktree
+database isolation and runtime dispatch.
 ```
 
 ## License

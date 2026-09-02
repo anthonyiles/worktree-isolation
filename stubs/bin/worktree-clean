@@ -12,15 +12,15 @@ declare(strict_types=1);
  * Reads DB credentials from .worktree-isolation.env and/or .env.testing.
  *
  * Usage:
- *   php bin/worktree-clean
- *   php bin/worktree-clean --force
+ *   vendor/bin/worktree-clean
+ *   vendor/bin/worktree-clean --force
  */
 
 $opts = getopt('', ['force', 'project-dir:', 'help']);
 
 if (isset($opts['help'])) {
     fwrite(STDOUT, <<<HELP
-    Usage: php bin/worktree-clean [OPTIONS]
+    Usage: vendor/bin/worktree-clean [OPTIONS]
 
     Drops all per-worktree test databases matching the "{base}-*" pattern.
 
@@ -34,7 +34,7 @@ if (isset($opts['help'])) {
 }
 
 $force = isset($opts['force']);
-$projectDir = $opts['project-dir'] ?? dirname(__DIR__);
+$projectDir = $opts['project-dir'] ?? resolveProjectRoot();
 
 $env = loadEnvFiles($projectDir);
 
@@ -104,6 +104,16 @@ exit(0);
 // ---------------------------------------------------------------------------
 // Functions
 // ---------------------------------------------------------------------------
+
+function resolveProjectRoot(): string
+{
+    // Resolved via git rather than this script's own location, since it
+    // runs from vendor/bin/worktree-clean (a Composer-managed symlink) —
+    // its own path is two levels removed from the project root.
+    $toplevel = trim((string) shell_exec('git rev-parse --show-toplevel 2>/dev/null'));
+
+    return $toplevel !== '' ? $toplevel : getcwd();
+}
 
 function loadEnvFiles(string $projectDir): array
 {

@@ -16,11 +16,7 @@ class CleanDatabasesCommand extends Command
 
     public function handle(): int
     {
-        $script = base_path('bin/worktree-clean');
-
-        if (! file_exists($script)) {
-            $script = dirname(__DIR__, 2).'/stubs/bin/worktree-clean';
-        }
+        $script = dirname(__DIR__, 2).'/stubs/bin/worktree-clean';
 
         $args = [PHP_BINARY, $script, '--project-dir='.base_path()];
 

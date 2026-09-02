@@ -10,12 +10,15 @@
 # Usage (after creating a worktree):
 #   git worktree add ../worktrees/my-project/my-branch my-branch
 #   cd ../worktrees/my-project/my-branch
-#   bin/worktree-setup
+#   vendor/bin/worktree-setup
 #
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# Resolved from the caller's cwd (git sets this to the worktree root before
+# invoking post-checkout) rather than this script's own location, since this
+# script now runs from inside vendor/ — its own path tells you nothing about
+# which worktree it's bootstrapping.
+PROJECT_ROOT="$(git rev-parse --show-toplevel)"
 
 # ---------------------------------------------------------------------------
 # 0. Load configuration
@@ -190,4 +193,4 @@ esac
 # Done
 # ---------------------------------------------------------------------------
 echo ""
-echo "Worktree setup complete. You can now run tests with: bin/test"
+echo "Worktree setup complete. You can now run tests with: vendor/bin/test"

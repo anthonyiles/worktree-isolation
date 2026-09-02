@@ -11,14 +11,16 @@
 # WORKTREE_TEST_COMMAND in .worktree-isolation.env (e.g. `php vendor/bin/phpunit`).
 #
 # Usage:
-#   bin/test                        # run all tests
-#   bin/test --filter=testName      # forward args to test runner
-#   bin/test tests/Feature/MyTest.php
+#   vendor/bin/test                        # run all tests
+#   vendor/bin/test --filter=testName      # forward args to test runner
+#   vendor/bin/test tests/Feature/MyTest.php
 #
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# Resolved from the caller's cwd rather than this script's own location,
+# since it runs from vendor/bin/test (a Composer-managed symlink) — its own
+# path is two levels removed from the project root it needs to operate on.
+PROJECT_ROOT="$(git rev-parse --show-toplevel)"
 
 # ---------------------------------------------------------------------------
 # 0. Load configuration
