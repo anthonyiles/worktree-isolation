@@ -14,10 +14,8 @@
 #
 set -euo pipefail
 
-# Resolved from the caller's cwd (git sets this to the worktree root before
-# invoking post-checkout) rather than this script's own location, since this
-# script now runs from inside vendor/ — its own path tells you nothing about
-# which worktree it's bootstrapping.
+# git sets cwd to the worktree root before invoking post-checkout, so this
+# resolves correctly even though the script itself lives in vendor/.
 PROJECT_ROOT="$(git rev-parse --show-toplevel)"
 
 # ---------------------------------------------------------------------------
@@ -35,9 +33,11 @@ RUNTIME="${WORKTREE_RUNTIME:-native}"
 TESTING_ENV_FILE="${WORKTREE_TESTING_ENV_FILE:-.env.testing}"
 TESTING_ENV_EXAMPLE="${WORKTREE_TESTING_ENV_EXAMPLE:-.env.testing.example}"
 DB_PER_WORKTREE_KEY="${WORKTREE_DB_PER_WORKTREE_KEY:-TEST_DB_PER_WORKTREE}"
+RESOLVER_CLASS="${WORKTREE_RESOLVER_CLASS:-WorktreeIsolation\\TestDatabaseResolver}"
 
 # docker-image driver settings
 IMAGE="${WORKTREE_DOCKER_IMAGE:-}"
+NETWORK="${WORKTREE_DOCKER_NETWORK:-}"
 WORKDIR="${WORKTREE_DOCKER_WORKDIR:-/var/www/html}"
 
 # docker-compose driver settings
@@ -129,7 +129,8 @@ if [[ -n "$MAIN_REPO" ]]; then
     # Worktrees must use per-worktree test databases to avoid conflicts
     if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
         if grep -q "^${DB_PER_WORKTREE_KEY}=" "$PROJECT_ROOT/$TESTING_ENV_FILE"; then
-            sed -i '' "s/^${DB_PER_WORKTREE_KEY}=.*/${DB_PER_WORKTREE_KEY}=true/" "$PROJECT_ROOT/$TESTING_ENV_FILE"
+            sed -i.bak "s/^${DB_PER_WORKTREE_KEY}=.*/${DB_PER_WORKTREE_KEY}=true/" "$PROJECT_ROOT/$TESTING_ENV_FILE"
+            rm -f "$PROJECT_ROOT/$TESTING_ENV_FILE.bak"
         else
             echo "${DB_PER_WORKTREE_KEY}=true" >> "$PROJECT_ROOT/$TESTING_ENV_FILE"
         fi
@@ -165,7 +166,109 @@ case "$RUNTIME" in
 esac
 
 # ---------------------------------------------------------------------------
-# 5. Install npm dependencies
+# 5. Derive and create the per-worktree test database
+# ---------------------------------------------------------------------------
+# Writing DB_DATABASE into $TESTING_ENV_FILE means sail test, artisan test,
+# and phpunit all read the isolated database too, not just vendor/bin/test.
+# vendor/bin/test re-derives it independently on every run as well.
+if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
+    echo ""
+    echo "Deriving per-worktree test database..."
+
+    # set -a exports DB_* (and friends) so the PHP snippet below can read
+    # them via getenv().
+    set -a
+    # shellcheck disable=SC1090
+    source "$PROJECT_ROOT/$TESTING_ENV_FILE"
+    set +a
+
+    WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
+
+    DERIVE_DB_PHP='
+        require "__AUTOLOAD__";
+        $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
+        $base  = getenv("DB_DATABASE") ?: "testing";
+        $wt    = getenv("WORKTREE_BASENAME") ?: "worktree";
+        $name  = $class::derive($base, $wt);
+        $class::ensureExists(
+            $name,
+            getenv("DB_HOST") ?: "127.0.0.1",
+            (int)(getenv("DB_PORT") ?: 3306),
+            getenv("DB_USERNAME") ?: "",
+            getenv("DB_PASSWORD") ?: "",
+        );
+        echo $name;
+    '
+
+    # set +e: a DB failure here (MySQL down, bad creds, missing driver) must
+    # not abort setup — npm install still needs to run, and vendor/bin/test
+    # retries this derivation later.
+    set +e
+    DERIVED_DB=""
+    case "$RUNTIME" in
+        native)
+            DERIVED_DB="$(
+                RESOLVER_CLASS="$RESOLVER_CLASS" \
+                WORKTREE_BASENAME="$WORKTREE_BASENAME" \
+                    php -r "${DERIVE_DB_PHP//__AUTOLOAD__/$PROJECT_ROOT/vendor/autoload.php}"
+            )"
+            ;;
+        docker-compose)
+            # shellcheck disable=SC2086
+            DERIVED_DB="$(
+                docker compose $COMPOSE_FILE_OPT exec -T \
+                    -e "RESOLVER_CLASS=$RESOLVER_CLASS" \
+                    -e "WORKTREE_BASENAME=$WORKTREE_BASENAME" \
+                    -e "DB_DATABASE=${DB_DATABASE:-}" \
+                    -e "DB_HOST=${DB_HOST:-}" \
+                    -e "DB_PORT=${DB_PORT:-}" \
+                    -e "DB_USERNAME=${DB_USERNAME:-}" \
+                    -e "DB_PASSWORD=${DB_PASSWORD:-}" \
+                    "$COMPOSE_SERVICE" \
+                    php -r "${DERIVE_DB_PHP//__AUTOLOAD__/vendor/autoload.php}"
+            )"
+            ;;
+        docker-image)
+            DOCKER_NETWORK_OPT=()
+            if [[ -n "$NETWORK" ]]; then
+                DOCKER_NETWORK_OPT=(--network "$NETWORK")
+            fi
+            DERIVED_DB="$(
+                docker run --rm \
+                    -v "$PROJECT_ROOT:$WORKDIR" \
+                    -w "$WORKDIR" \
+                    "${DOCKER_NETWORK_OPT[@]}" \
+                    -e "RESOLVER_CLASS=$RESOLVER_CLASS" \
+                    -e "WORKTREE_BASENAME=$WORKTREE_BASENAME" \
+                    -e "DB_DATABASE=${DB_DATABASE:-}" \
+                    -e "DB_HOST=${DB_HOST:-}" \
+                    -e "DB_PORT=${DB_PORT:-}" \
+                    -e "DB_USERNAME=${DB_USERNAME:-}" \
+                    -e "DB_PASSWORD=${DB_PASSWORD:-}" \
+                    --entrypoint php \
+                    "$IMAGE" \
+                    -r "${DERIVE_DB_PHP//__AUTOLOAD__/vendor/autoload.php}"
+            )"
+            ;;
+    esac
+    set -e
+
+    if [[ -n "$DERIVED_DB" ]]; then
+        if grep -q "^DB_DATABASE=" "$PROJECT_ROOT/$TESTING_ENV_FILE"; then
+            sed -i.bak "s/^DB_DATABASE=.*/DB_DATABASE=${DERIVED_DB}/" "$PROJECT_ROOT/$TESTING_ENV_FILE"
+            rm -f "$PROJECT_ROOT/$TESTING_ENV_FILE.bak"
+        else
+            echo "DB_DATABASE=${DERIVED_DB}" >> "$PROJECT_ROOT/$TESTING_ENV_FILE"
+        fi
+        echo "Set DB_DATABASE=${DERIVED_DB} in $TESTING_ENV_FILE"
+    else
+        echo "Warning: Could not derive the per-worktree database name — check DB_* settings in $TESTING_ENV_FILE." >&2
+        echo "  vendor/bin/test will still derive and create it on first run." >&2
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Install npm dependencies
 # ---------------------------------------------------------------------------
 echo ""
 echo "Installing npm dependencies..."

@@ -74,11 +74,8 @@ if (! verifyGitVersion()) {
 }
 
 // 2. Create .worktree-isolation.env — the only file this installer writes
-// into the project. Everything else (worktree-setup, test, worktree-clean,
-// worktree-install, the post-checkout hook) is run straight out of vendor/,
-// so it always matches the installed package version and never drifts.
-// worktree-setup, test, worktree-clean, and worktree-install are available
-// via vendor/bin/ automatically, courtesy of Composer's "bin" declaration.
+// into the project. worktree-setup/test/worktree-clean/worktree-install run
+// straight from vendor/bin/ (Composer's "bin" declaration).
 createEnvConfig($projectDir, $runtime, $opts, $force);
 
 // 3. Configure git hooks
@@ -104,9 +101,8 @@ exit(0);
 
 function resolveProjectRoot(): string
 {
-    // Not based on this script's own location: it runs from vendor/bin/
-    // (a Composer-managed symlink), which tells you nothing about which
-    // project it's installing into.
+    // vendor/bin/worktree-install is a Composer-managed symlink, not the
+    // project root — resolve via git instead.
     $toplevel = trim((string) shell_exec('git rev-parse --show-toplevel 2>/dev/null'));
 
     return $toplevel !== '' ? $toplevel : getcwd();
@@ -222,11 +218,9 @@ function createEnvConfig(string $projectDir, string $runtime, array $opts, bool 
 
 function configureGitHooks(string $projectDir, string $stubsDir): void
 {
-    // The command must be an absolute path: git resolves a relative
-    // hook.*.command against the cwd of whatever worktree is running the
-    // hook (the *new* worktree, for post-checkout) — not against the main
-    // repo. It points straight at the vendor copy — nothing is published
-    // into the project, so there's nothing to keep in sync on upgrade.
+    // hook.*.command must be an absolute path: git resolves a relative one
+    // against the cwd of whatever worktree is running the hook (the new
+    // worktree, for post-checkout), not the main repo.
     $hookScript = "$stubsDir/githooks/post-checkout-worktree-setup.sh";
 
     exec(

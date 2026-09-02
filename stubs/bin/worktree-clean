@@ -107,9 +107,8 @@ exit(0);
 
 function resolveProjectRoot(): string
 {
-    // Resolved via git rather than this script's own location, since it
-    // runs from vendor/bin/worktree-clean (a Composer-managed symlink) —
-    // its own path is two levels removed from the project root.
+    // vendor/bin/worktree-clean is a Composer-managed symlink, not the
+    // project root — resolve via git instead.
     $toplevel = trim((string) shell_exec('git rev-parse --show-toplevel 2>/dev/null'));
 
     return $toplevel !== '' ? $toplevel : getcwd();

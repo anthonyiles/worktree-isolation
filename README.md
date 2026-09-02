@@ -168,19 +168,20 @@ When you run `git worktree add`, the `post-checkout` hook detects the new worktr
 2. Copies `.env.testing` (or falls back to `.env.testing.example`)
 3. Forces `TEST_DB_PER_WORKTREE=true` in the worktree's `.env.testing`
 4. Runs `composer install` (via the configured runtime)
-5. Runs `npm install` (via the configured runtime)
+5. Derives the per-worktree database name, creates it, and writes it as `DB_DATABASE` in the worktree's `.env.testing`
+6. Runs `npm install` (via the configured runtime)
 
 ### Per-Worktree Test Databases
 
-When `TEST_DB_PER_WORKTREE=true`, `vendor/bin/test` derives a unique database name from the worktree directory:
+The database name is derived from the worktree directory:
 
 ```
 testing-{worktree-folder-name}
 ```
 
-For example, a worktree at `../worktrees/my-project/feature-auth` gets database `testing-feature-auth`.
+For example, a worktree at `../worktrees/my-project/feature-auth` gets database `testing-feature-auth`. A safety guard ensures the derived name always contains "test" to prevent accidental use of production databases.
 
-The database is created automatically on first test run. A safety guard ensures the derived name always contains "test" to prevent accidental use of production databases.
+Because this name is written directly into `.env.testing` at bootstrap time (step 5 above), it applies no matter how you run tests — `vendor/bin/test`, `sail test`, `php artisan test`, `vendor/bin/phpunit`, or anything else that reads `.env.testing` the normal way. `vendor/bin/test` also re-derives and re-creates the database dynamically on every run, so it stays correct even if step 5 failed at setup time (e.g. the database wasn't reachable yet) or the worktree directory gets renamed later.
 
 ### Running Tests
 
@@ -265,12 +266,13 @@ All installed via Composer's `bin` mechanism — `vendor/bin/*` always matches t
 
 ## AI Agent Integration
 
-Add this to your project's cursor rules or AGENTS.md:
+The per-worktree database is baked into `.env.testing` at bootstrap time (see [Per-Worktree Test Databases](#per-worktree-test-databases)), so an agent that runs `sail test` or `php artisan test` directly still hits the correct, isolated database — it doesn't depend on the agent knowing about `vendor/bin/test`. `vendor/bin/test` is still worth pointing agents at for its runtime dispatch (docker-compose/docker-image projects need `composer`/`npm`/test commands routed into the right container). Add this to your project's cursor rules or AGENTS.md:
 
 ```markdown
 **Worktrees:** If the working directory is a git worktree (`.git` is a file, not a directory),
-you **must** use `vendor/bin/test` instead of your usual test command. It handles per-worktree
-database isolation and runtime dispatch.
+prefer `vendor/bin/test` over your usual test command — it handles runtime dispatch (native,
+Docker Compose, Sail) on top of the per-worktree database isolation that's already active in
+.env.testing.
 ```
 
 ## License

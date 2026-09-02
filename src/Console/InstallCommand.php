@@ -60,7 +60,6 @@ class InstallCommand extends Command
             return self::FAILURE;
         }
 
-        // Also publish the Laravel config file
         $this->callSilently('vendor:publish', [
             '--tag' => 'worktree-isolation-config',
             '--force' => (bool) $this->option('force'),

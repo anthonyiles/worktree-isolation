@@ -17,9 +17,8 @@
 #
 set -euo pipefail
 
-# Resolved from the caller's cwd rather than this script's own location,
-# since it runs from vendor/bin/test (a Composer-managed symlink) — its own
-# path is two levels removed from the project root it needs to operate on.
+# vendor/bin/test is a Composer-managed symlink, not the project root —
+# resolve via git instead.
 PROJECT_ROOT="$(git rev-parse --show-toplevel)"
 
 # ---------------------------------------------------------------------------
