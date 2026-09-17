@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/anthonyiles/worktree-isolation/compare/v1.0.0...v1.1.0) (2026-09-17)
+
+
+### Features
+
+* isolate Docker Compose stack and project name per worktree ([444c4e8](https://github.com/anthonyiles/worktree-isolation/commit/444c4e8bded3d56dc3af1950d37e33745bf7587e))
+
 ## 1.0.0 (2026-09-02)
 
 
