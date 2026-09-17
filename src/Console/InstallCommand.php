@@ -14,6 +14,7 @@ class InstallCommand extends Command
         {--docker-image= : Docker image name (docker-image runtime)}
         {--docker-network= : Docker network name (docker-image runtime)}
         {--compose-service=app : Docker Compose service name (docker-compose runtime)}
+        {--compose-project-base= : Docker Compose project base name (docker-compose runtime, default: derived from the project directory name)}
         {--test-command= : Test runner command (default: php artisan test)}
         {--force : Overwrite existing files}';
 
@@ -39,6 +40,10 @@ class InstallCommand extends Command
 
         if ($this->option('compose-service') !== 'app') {
             $args[] = '--compose-service='.$this->option('compose-service');
+        }
+
+        if ($this->option('compose-project-base')) {
+            $args[] = '--compose-project-base='.$this->option('compose-project-base');
         }
 
         if ($this->option('test-command')) {

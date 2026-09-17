@@ -17,6 +17,7 @@ set -euo pipefail
 # git sets cwd to the worktree root before invoking post-checkout, so this
 # resolves correctly even though the script itself lives in vendor/.
 PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
 
 # ---------------------------------------------------------------------------
 # 0. Load configuration
@@ -28,6 +29,24 @@ if [[ -f "$CONF_FILE" ]]; then
     source "$CONF_FILE"
     set +a
 fi
+
+# vendor/bin/worktree-setup is a Composer-managed symlink, so
+# ${BASH_SOURCE[0]} points at the symlink, not the real file next to
+# _worktree-lib.sh. readlink -f isn't portable (no -f on macOS's stock
+# readlink), so resolve it manually.
+resolve_script_dir() {
+    local src="${BASH_SOURCE[0]}"
+    while [[ -h "$src" ]]; do
+        local dir
+        dir="$(cd -P "$(dirname "$src")" && pwd)"
+        src="$(readlink "$src")"
+        [[ "$src" != /* ]] && src="$dir/$src"
+    done
+    cd -P "$(dirname "$src")" && pwd
+}
+SCRIPT_DIR="$(resolve_script_dir)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/_worktree-lib.sh"
 
 RUNTIME="${WORKTREE_RUNTIME:-native}"
 TESTING_ENV_FILE="${WORKTREE_TESTING_ENV_FILE:-.env.testing}"
@@ -97,6 +116,15 @@ elif [[ -d "$PROJECT_ROOT/.git" ]]; then
     exit 0
 fi
 
+# The env var is normally set by worktree-install; the fallback here is just
+# a safety net for a .worktree-isolation.env written before this feature
+# existed.
+COMPOSE_PROJECT_BASE="${WORKTREE_COMPOSE_PROJECT_BASE:-}"
+if [[ -z "$COMPOSE_PROJECT_BASE" ]]; then
+    COMPOSE_PROJECT_BASE="$(basename "${MAIN_REPO:-$PROJECT_ROOT}")"
+fi
+COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$COMPOSE_PROJECT_BASE" "$WORKTREE_BASENAME")"
+
 # ---------------------------------------------------------------------------
 # 3. Copy .env files from the main repo if they don't exist here
 # ---------------------------------------------------------------------------
@@ -141,7 +169,21 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Install Composer dependencies
+# 4. Bring up this worktree's own Compose stack
+# ---------------------------------------------------------------------------
+# Bind mounts are resolved once, at `up` time, to whatever host directory the
+# stack is started from — a running container can't be repointed at a
+# different worktree via `exec`. So each worktree needs its own stack,
+# scoped by COMPOSE_PROJECT_NAME, rather than assuming one is already up.
+if [[ "$RUNTIME" == "docker-compose" ]]; then
+    echo ""
+    echo "Starting Docker Compose stack ($COMPOSE_PROJECT_NAME)..."
+    # shellcheck disable=SC2086
+    docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILE_OPT up -d
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Install Composer dependencies
 # ---------------------------------------------------------------------------
 echo ""
 echo "Installing Composer dependencies..."
@@ -152,7 +194,7 @@ case "$RUNTIME" in
         ;;
     docker-compose)
         # shellcheck disable=SC2086
-        docker compose $COMPOSE_FILE_OPT exec -T "$COMPOSE_SERVICE" \
+        docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILE_OPT exec -T "$COMPOSE_SERVICE" \
             composer install --no-interaction --no-progress
         ;;
     docker-image)
@@ -166,7 +208,7 @@ case "$RUNTIME" in
 esac
 
 # ---------------------------------------------------------------------------
-# 5. Derive and create the per-worktree test database
+# 6. Derive and create the per-worktree test database
 # ---------------------------------------------------------------------------
 # Writing DB_DATABASE into $TESTING_ENV_FILE means sail test, artisan test,
 # and phpunit all read the isolated database too, not just vendor/bin/test.
@@ -181,8 +223,6 @@ if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$PROJECT_ROOT/$TESTING_ENV_FILE"
     set +a
-
-    WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
 
     DERIVE_DB_PHP='
         require "__AUTOLOAD__";
@@ -216,7 +256,7 @@ if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
         docker-compose)
             # shellcheck disable=SC2086
             DERIVED_DB="$(
-                docker compose $COMPOSE_FILE_OPT exec -T \
+                docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILE_OPT exec -T \
                     -e "RESOLVER_CLASS=$RESOLVER_CLASS" \
                     -e "WORKTREE_BASENAME=$WORKTREE_BASENAME" \
                     -e "DB_DATABASE=${DB_DATABASE:-}" \
@@ -268,7 +308,7 @@ if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Install npm dependencies
+# 7. Install npm dependencies
 # ---------------------------------------------------------------------------
 echo ""
 echo "Installing npm dependencies..."
@@ -279,7 +319,7 @@ case "$RUNTIME" in
         ;;
     docker-compose)
         # shellcheck disable=SC2086
-        docker compose $COMPOSE_FILE_OPT exec -T "$COMPOSE_SERVICE" \
+        docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILE_OPT exec -T "$COMPOSE_SERVICE" \
             npm install --no-progress
         ;;
     docker-image)

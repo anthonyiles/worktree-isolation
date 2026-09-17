@@ -23,6 +23,7 @@ $opts = getopt('', [
     'docker-image:',
     'docker-network:',
     'compose-service:',
+    'compose-project-base:',
     'test-command:',
     'force',
     'project-dir:',
@@ -35,15 +36,17 @@ if (isset($opts['help'])) {
     Usage: vendor/bin/worktree-install [OPTIONS]
 
     Options:
-      --runtime=DRIVER       Runtime driver: native (default), docker-compose, docker-image
-      --docker-image=NAME    Docker image name (docker-image runtime)
-      --docker-network=NAME  Docker network name (docker-image runtime)
-      --compose-service=NAME Docker Compose service name (docker-compose runtime, default: app)
-      --test-command=CMD     Test command (default: php artisan test)
-      --force                Overwrite existing files
-      --project-dir=PATH     Project root (default: auto-detected)
-      --stubs-dir=PATH       Stubs directory (default: auto-detected from package)
-      --help                 Show this help
+      --runtime=DRIVER              Runtime driver: native (default), docker-compose, docker-image
+      --docker-image=NAME           Docker image name (docker-image runtime)
+      --docker-network=NAME         Docker network name (docker-image runtime)
+      --compose-service=NAME        Docker Compose service name (docker-compose runtime, default: app)
+      --compose-project-base=NAME   Docker Compose project base name (docker-compose runtime,
+                                     default: derived from the project directory name)
+      --test-command=CMD            Test command (default: php artisan test)
+      --force                       Overwrite existing files
+      --project-dir=PATH            Project root (default: auto-detected)
+      --stubs-dir=PATH              Stubs directory (default: auto-detected from package)
+      --help                        Show this help
 
     HELP);
     exit(0);
@@ -125,6 +128,20 @@ function findStubsDir(string $projectDir): ?string
     return null;
 }
 
+function sanitizeComposeProjectBase(string $base): string
+{
+    // Same sanitization pattern as TestDatabaseResolver::derive() and the
+    // bash-side derive_compose_project_name(): lowercase, collapse anything
+    // outside [a-z0-9] into a single hyphen, trim leading/trailing hyphens.
+    // Applied whether $base was auto-derived or passed via --compose-project-base,
+    // so an explicit value can never produce an invalid Compose project name.
+    $base = strtolower($base);
+    $base = preg_replace('/[^a-z0-9]+/', '-', $base) ?? '';
+    $base = trim($base, '-');
+
+    return $base !== '' ? $base : 'worktree';
+}
+
 function verifyGitVersion(): bool
 {
     exec('git --version 2>&1', $output, $exitCode);
@@ -178,10 +195,12 @@ function createEnvConfig(string $projectDir, string $runtime, array $opts, bool 
 
     if ($runtime === 'docker-compose') {
         $service = $opts['compose-service'] ?? 'app';
+        $projectBase = sanitizeComposeProjectBase($opts['compose-project-base'] ?? basename($projectDir));
         $lines[] = '';
         $lines[] = '# docker-compose runtime settings';
         $lines[] = "WORKTREE_COMPOSE_SERVICE=$service";
         $lines[] = '# WORKTREE_COMPOSE_FILE=docker-compose.yml';
+        $lines[] = "WORKTREE_COMPOSE_PROJECT_BASE=$projectBase";
     }
 
     if ($runtime === 'docker-image') {
