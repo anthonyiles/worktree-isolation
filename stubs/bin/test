@@ -20,6 +20,7 @@ set -euo pipefail
 # vendor/bin/test is a Composer-managed symlink, not the project root —
 # resolve via git instead.
 PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
 
 # ---------------------------------------------------------------------------
 # 0. Load configuration
@@ -31,6 +32,23 @@ if [[ -f "$CONF_FILE" ]]; then
     source "$CONF_FILE"
     set +a
 fi
+
+# vendor/bin/test is a Composer-managed symlink, so ${BASH_SOURCE[0]} points
+# at the symlink, not the real file next to _worktree-lib.sh. readlink -f
+# isn't portable (no -f on macOS's stock readlink), so resolve it manually.
+resolve_script_dir() {
+    local src="${BASH_SOURCE[0]}"
+    while [[ -h "$src" ]]; do
+        local dir
+        dir="$(cd -P "$(dirname "$src")" && pwd)"
+        src="$(readlink "$src")"
+        [[ "$src" != /* ]] && src="$dir/$src"
+    done
+    cd -P "$(dirname "$src")" && pwd
+}
+SCRIPT_DIR="$(resolve_script_dir)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/_worktree-lib.sh"
 
 RUNTIME="${WORKTREE_RUNTIME:-native}"
 TEST_COMMAND="${WORKTREE_TEST_COMMAND:-php artisan test}"
@@ -49,6 +67,11 @@ COMPOSE_FILE_OPT=""
 if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
     COMPOSE_FILE_OPT="-f $WORKTREE_COMPOSE_FILE"
 fi
+# The env var is normally set by worktree-install; the fallback here is just
+# a safety net for a .worktree-isolation.env written before this feature
+# existed. Unlike worktree-setup, there's no MAIN_REPO to fall back to here.
+COMPOSE_PROJECT_BASE="${WORKTREE_COMPOSE_PROJECT_BASE:-$(basename "$PROJECT_ROOT")}"
+COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$COMPOSE_PROJECT_BASE" "$WORKTREE_BASENAME")"
 
 # ---------------------------------------------------------------------------
 # 1. Validate runtime
@@ -145,8 +168,6 @@ DB_ENSURE_PHP='
 # 4. Run tests
 # ---------------------------------------------------------------------------
 if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ ]]; then
-    WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
-
     case "$RUNTIME" in
         native)
             RESOLVER_CLASS="$RESOLVER_CLASS" \
@@ -160,7 +181,7 @@ if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ ]]; then
 
         docker-compose)
             # shellcheck disable=SC2086
-            docker compose $COMPOSE_FILE_OPT exec -T \
+            docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILE_OPT exec -T \
                 -e "RESOLVER_CLASS=$RESOLVER_CLASS" \
                 -e "WORKTREE_BASENAME=$WORKTREE_BASENAME" \
                 -e "TEST_COMMAND=$TEST_COMMAND" \
@@ -227,7 +248,7 @@ else
             ;;
         docker-compose)
             # shellcheck disable=SC2086
-            docker compose $COMPOSE_FILE_OPT exec -T \
+            docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILE_OPT exec -T \
                 -e "TEST_COMMAND=$TEST_COMMAND" \
                 "$COMPOSE_SERVICE" \
                 bash -c '$TEST_COMMAND "$@"' -- "$@"

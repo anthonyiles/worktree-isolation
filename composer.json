@@ -25,7 +25,8 @@
         }
     },
     "scripts": {
-        "test": "phpunit"
+        "test": "phpunit",
+        "test:bash": "bats tests/bats"
     },
     "bin": [
         "stubs/bin/worktree-install",

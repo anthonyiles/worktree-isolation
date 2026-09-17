@@ -20,3 +20,8 @@ jobs:
       - run: composer install --no-interaction --prefer-dist
 
       - run: vendor/bin/phpunit
+
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+
+      - run: bats tests/bats

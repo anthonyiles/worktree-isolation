@@ -48,6 +48,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Docker Compose Project Base
+    |--------------------------------------------------------------------------
+    |
+    | Base name used to derive an isolated Docker Compose project name per
+    | worktree: "{base}-{worktree-basename}". Only used with the
+    | "docker-compose" runtime. Defaults to the project directory name at
+    | install time — see WORKTREE_COMPOSE_PROJECT_BASE in
+    | .worktree-isolation.env.
+    |
+    */
+
+    'compose_project_base' => env('WORKTREE_COMPOSE_PROJECT_BASE', ''),
+
+    /*
+    |--------------------------------------------------------------------------
     | Docker Image
     |--------------------------------------------------------------------------
     |
