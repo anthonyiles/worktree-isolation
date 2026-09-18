@@ -4,7 +4,9 @@
 declare(strict_types=1);
 
 /**
- * Standalone cleanup script for per-worktree test databases.
+ * Cleanup script for per-worktree test databases. Invoked as
+ * `vendor/bin/worktree clean` (stubs/bin/worktree dispatches straight into
+ * this file); not itself exposed as a Composer bin.
  *
  * No framework dependencies — uses only PDO.
  * Laravel projects can also use `php artisan worktree:clean` which delegates here.
@@ -12,15 +14,15 @@ declare(strict_types=1);
  * Reads DB credentials from .worktree-isolation.env and/or .env.testing.
  *
  * Usage:
- *   vendor/bin/worktree-clean
- *   vendor/bin/worktree-clean --force
+ *   vendor/bin/worktree clean
+ *   vendor/bin/worktree clean --force
  */
 
 $opts = getopt('', ['force', 'project-dir:', 'help']);
 
 if (isset($opts['help'])) {
     fwrite(STDOUT, <<<HELP
-    Usage: vendor/bin/worktree-clean [OPTIONS]
+    Usage: vendor/bin/worktree clean [OPTIONS]
 
     Drops all per-worktree test databases matching the "{base}-*" pattern.
 
@@ -107,8 +109,8 @@ exit(0);
 
 function resolveProjectRoot(): string
 {
-    // vendor/bin/worktree-clean is a Composer-managed symlink, not the
-    // project root — resolve via git instead.
+    // This script runs from inside vendor/, not the project root —
+    // resolve via git instead.
     $toplevel = trim((string) shell_exec('git rev-parse --show-toplevel 2>/dev/null'));
 
     return $toplevel !== '' ? $toplevel : getcwd();

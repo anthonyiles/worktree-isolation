@@ -165,8 +165,8 @@ return [
     |--------------------------------------------------------------------------
     |
     | These environment variable names are read from .env.testing and forwarded
-    | to the Docker container when running tests via vendor/bin/test. Only
-    | relevant for the "docker-image" runtime.
+    | to the Docker container when running tests via vendor/bin/worktree test.
+    | Only relevant for the "docker-image" runtime.
     |
     */
 

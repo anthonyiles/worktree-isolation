@@ -11,13 +11,15 @@
 # WORKTREE_TEST_COMMAND in .worktree-isolation.env (e.g. `php vendor/bin/phpunit`).
 #
 # Usage:
-#   vendor/bin/test                        # run all tests
-#   vendor/bin/test --filter=testName      # forward args to test runner
-#   vendor/bin/test tests/Feature/MyTest.php
+#   vendor/bin/worktree test                        # run all tests
+#   vendor/bin/worktree test --filter=testName      # forward args to test runner
+#   vendor/bin/worktree test tests/Feature/MyTest.php
 #
+# Invoked as `vendor/bin/worktree test` (stubs/bin/worktree dispatches
+# straight into this file); not itself exposed as a Composer bin.
 set -euo pipefail
 
-# vendor/bin/test is a Composer-managed symlink, not the project root —
+# This script runs from inside vendor/, not the project root —
 # resolve via git instead.
 PROJECT_ROOT="$(git rev-parse --show-toplevel)"
 WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
@@ -33,9 +35,10 @@ if [[ -f "$CONF_FILE" ]]; then
     set +a
 fi
 
-# vendor/bin/test is a Composer-managed symlink, so ${BASH_SOURCE[0]} points
-# at the symlink, not the real file next to _worktree-lib.sh. readlink -f
-# isn't portable (no -f on macOS's stock readlink), so resolve it manually.
+# This file can still be invoked through a symlink (bats tests do this), so
+# keep resolving one defensively even though vendor/bin/worktree calls it by
+# a direct, non-symlinked path. readlink -f isn't portable (no -f on macOS's
+# stock readlink), so resolve it manually.
 resolve_script_dir() {
     local src="${BASH_SOURCE[0]}"
     while [[ -h "$src" ]]; do
@@ -58,7 +61,9 @@ RESOLVER_CLASS="${WORKTREE_RESOLVER_CLASS:-WorktreeIsolation\\TestDatabaseResolv
 
 # docker-image driver settings
 IMAGE="${WORKTREE_DOCKER_IMAGE:-}"
+# shellcheck disable=SC2034 # read by build_docker_image_args in _worktree-lib.sh
 NETWORK="${WORKTREE_DOCKER_NETWORK:-}"
+# shellcheck disable=SC2034
 WORKDIR="${WORKTREE_DOCKER_WORKDIR:-/var/www/html}"
 
 # docker-compose driver settings
@@ -113,39 +118,9 @@ if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Helper: build docker-image base args
+# 3. Inline PHP that derives and creates the per-worktree database.
 # ---------------------------------------------------------------------------
-build_docker_image_args() {
-    DOCKER_ARGS=(
-        docker run --rm
-        -v "$PROJECT_ROOT:$WORKDIR"
-        -w "$WORKDIR"
-    )
-
-    if [[ -n "$NETWORK" ]]; then
-        DOCKER_ARGS+=(--network "$NETWORK")
-    fi
-
-    local DEFAULT_ENV_VARS=(
-        APP_ENV APP_KEY APP_DEBUG
-        DB_CONNECTION DB_HOST DB_PORT DB_DATABASE DB_USERNAME DB_PASSWORD DB_SSL_VERIFY_SERVER_CERT
-        BCRYPT_ROUNDS CACHE_DRIVER MAIL_MAILER QUEUE_CONNECTION SESSION_DRIVER
-        TELESCOPE_ENABLED
-        "$DB_PER_WORKTREE_KEY"
-    )
-
-    local EXTRA_VARS
-    IFS=' ' read -ra EXTRA_VARS <<< "${WORKTREE_EXTRA_ENV_VARS:-}"
-    local ENV_VARS=("${DEFAULT_ENV_VARS[@]}" "${EXTRA_VARS[@]}")
-
-    for var in "${ENV_VARS[@]}"; do
-        if [[ -n "${!var:-}" ]]; then
-            DOCKER_ARGS+=(-e "$var=${!var}")
-        fi
-    done
-}
-
-# Inline PHP that derives and creates the per-worktree database.
+# build_docker_image_args (used below) comes from _worktree-lib.sh.
 # The autoload path placeholder is replaced per-driver.
 DB_ENSURE_PHP='
     require "__AUTOLOAD__";

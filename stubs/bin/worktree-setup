@@ -10,8 +10,11 @@
 # Usage (after creating a worktree):
 #   git worktree add ../worktrees/my-project/my-branch my-branch
 #   cd ../worktrees/my-project/my-branch
-#   vendor/bin/worktree-setup
+#   vendor/bin/worktree setup
 #
+# Invoked as `vendor/bin/worktree setup` (stubs/bin/worktree dispatches
+# straight into this file) or directly by the post-checkout git hook; not
+# itself exposed as a Composer bin.
 set -euo pipefail
 
 # git sets cwd to the worktree root before invoking post-checkout, so this
@@ -30,10 +33,11 @@ if [[ -f "$CONF_FILE" ]]; then
     set +a
 fi
 
-# vendor/bin/worktree-setup is a Composer-managed symlink, so
-# ${BASH_SOURCE[0]} points at the symlink, not the real file next to
-# _worktree-lib.sh. readlink -f isn't portable (no -f on macOS's stock
-# readlink), so resolve it manually.
+# This file can still be invoked through a symlink (bats' "resolves
+# _worktree-lib.sh when invoked through a symlink" test does this), so keep
+# resolving one defensively even though vendor/bin/worktree calls it by a
+# direct, non-symlinked path. readlink -f isn't portable (no -f on macOS's
+# stock readlink), so resolve it manually.
 resolve_script_dir() {
     local src="${BASH_SOURCE[0]}"
     while [[ -h "$src" ]]; do
@@ -211,8 +215,8 @@ esac
 # 6. Derive and create the per-worktree test database
 # ---------------------------------------------------------------------------
 # Writing DB_DATABASE into $TESTING_ENV_FILE means sail test, artisan test,
-# and phpunit all read the isolated database too, not just vendor/bin/test.
-# vendor/bin/test re-derives it independently on every run as well.
+# and phpunit all read the isolated database too, not just vendor/bin/worktree test.
+# vendor/bin/worktree test re-derives it independently on every run as well.
 if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
     echo ""
     echo "Deriving per-worktree test database..."
@@ -241,7 +245,7 @@ if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
     '
 
     # set +e: a DB failure here (MySQL down, bad creds, missing driver) must
-    # not abort setup — npm install still needs to run, and vendor/bin/test
+    # not abort setup — npm install still needs to run, and vendor/bin/worktree test
     # retries this derivation later.
     set +e
     DERIVED_DB=""
@@ -303,7 +307,7 @@ if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
         echo "Set DB_DATABASE=${DERIVED_DB} in $TESTING_ENV_FILE"
     else
         echo "Warning: Could not derive the per-worktree database name — check DB_* settings in $TESTING_ENV_FILE." >&2
-        echo "  vendor/bin/test will still derive and create it on first run." >&2
+        echo "  vendor/bin/worktree test will still derive and create it on first run." >&2
     fi
 fi
 
@@ -336,4 +340,4 @@ esac
 # Done
 # ---------------------------------------------------------------------------
 echo ""
-echo "Worktree setup complete. You can now run tests with: vendor/bin/test"
+echo "Worktree setup complete. You can now run tests with: vendor/bin/worktree test"
