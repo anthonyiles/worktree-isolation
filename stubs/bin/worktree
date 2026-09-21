@@ -99,9 +99,9 @@ WORKDIR="${WORKTREE_DOCKER_WORKDIR:-/var/www/html}"
 
 # docker-compose driver settings
 COMPOSE_SERVICE="${WORKTREE_COMPOSE_SERVICE:-app}"
-COMPOSE_FILE_OPT=""
+COMPOSE_FILE_ARGS=()
 if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
-    COMPOSE_FILE_OPT="-f $WORKTREE_COMPOSE_FILE"
+    COMPOSE_FILE_ARGS=(-f "$WORKTREE_COMPOSE_FILE")
 fi
 COMPOSE_PROJECT_BASE="${WORKTREE_COMPOSE_PROJECT_BASE:-$(basename "$PROJECT_ROOT")}"
 COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$COMPOSE_PROJECT_BASE" "$WORKTREE_BASENAME")"
@@ -154,10 +154,9 @@ case "$RUNTIME" in
         # (npm run dev, php artisan tinker) but is required for non-TTY
         # contexts (CI, agents, piped output). Only allocate one when stdout
         # is actually a terminal.
-        TTY_FLAG="-T"
-        [[ -t 1 ]] && TTY_FLAG=""
-        # shellcheck disable=SC2086
-        exec docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILE_OPT exec $TTY_FLAG \
+        TTY_ARGS=(-T)
+        [[ -t 1 ]] && TTY_ARGS=()
+        exec docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILE_ARGS[@]}" exec "${TTY_ARGS[@]}" \
             "$COMPOSE_SERVICE" "$COMMAND" "$@"
         ;;
 
