@@ -81,7 +81,7 @@ RUN_TESTS='
 TEST_ENV=(-e "TEST_COMMAND=$TEST_COMMAND")
 MAIN_TEST_DB="$(main_test_database)"
 
-if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ ]]; then
+if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ && "${DB_CONNECTION:-}" =~ ^(mysql|mariadb)$ ]]; then
     # Derive from the main checkout's name, as setup does.
     base_db="${MAIN_TEST_DB:-${DB_DATABASE:-}}"
     if ! DB_DATABASE="$(derive_test_database_name "${base_db:-testing}" "$WORKTREE_BASENAME")"; then

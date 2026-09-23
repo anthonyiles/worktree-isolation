@@ -123,11 +123,12 @@ derive_dev_database_name() {
     derive_worktree_database_name "$1" "$2" 64
 }
 
+# The "test" check runs on the base: a worktree named e.g. "test-refactor"
+# must not make a non-test base pass.
 derive_test_database_name() {
-    local derived
-    derived="$(derive_worktree_database_name "$1" "$2" 40)" || return 1
-    [[ "$(echo "$derived" | tr '[:upper:]' '[:lower:]')" == *test* ]] || return 1
-    echo "$derived"
+    local base="${1%%_wt_*}"
+    [[ "$(echo "$base" | tr '[:upper:]' '[:lower:]')" == *test* ]] || return 1
+    derive_worktree_database_name "$base" "$2" 40
 }
 
 # Creates a per-worktree database, re-deriving its name with the PHP
@@ -246,12 +247,21 @@ env_file_value() {
     echo "$value"
 }
 
+# The value goes through ENVIRON rather than a sed expression, so it's never
+# interpreted.
 set_env_file_value() {
-    local file="$1" key="$2" value="$3"
-    if grep -q "^${key}=" "$file"; then
-        sed -i.bak "s/^${key}=.*/${key}=${value}/" "$file"
-        rm -f "$file.bak"
-    else
-        echo "${key}=${value}" >> "$file"
-    fi
+    local file="$1" key="$2" value="$3" tmp
+    tmp="$(mktemp)"
+    KEY="$key" VALUE="$value" awk '
+        BEGIN { prefix = ENVIRON["KEY"] "=" }
+        index($0, prefix) == 1 { print prefix ENVIRON["VALUE"]; found = 1; next }
+        { print }
+        END { if (!found) print prefix ENVIRON["VALUE"] }
+    ' "$file" > "$tmp"
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
+}
+
+is_mysql_connection() {
+    [[ "$(env_file_value "$1" DB_CONNECTION)" =~ ^(mysql|mariadb)$ ]]
 }

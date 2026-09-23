@@ -28,13 +28,15 @@ class TestDatabaseResolver
             throw new InvalidArgumentException('Cannot derive a per-worktree database name from an empty DB_DATABASE.');
         }
 
-        $derived = $base.DevDatabaseResolver::MARKER.self::worktreeSuffix($worktreeBasename);
-
-        if (! str_contains(strtolower($derived), 'test')) {
+        // Checked on the base: a worktree named e.g. "test-refactor" must not
+        // make a non-test base pass.
+        if (! str_contains(strtolower($base), 'test')) {
             throw new InvalidArgumentException(
-                "Derived database name \"$derived\" does not contain \"test\". Refusing to proceed — this guard prevents accidental use of a non-test database."
+                "Database name \"$base\" does not contain \"test\". Refusing to proceed — this guard prevents accidental use of a non-test database."
             );
         }
+
+        $derived = $base.DevDatabaseResolver::MARKER.self::worktreeSuffix($worktreeBasename);
 
         if (strlen($derived) > self::MAX_DERIVED_LENGTH) {
             throw new InvalidArgumentException(

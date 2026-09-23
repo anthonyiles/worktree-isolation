@@ -58,3 +58,35 @@ setup() {
     run derive_test_database_name "testing" "$(printf 'a%.0s' {1..30})"
     [ "$status" -eq 1 ]
 }
+
+@test "does not let the worktree name satisfy the test database check" {
+    run derive_test_database_name "laravel" "test-refactor"
+    [ "$status" -eq 1 ]
+}
+
+@test "writes env values containing sed metacharacters verbatim" {
+    file="$BATS_TEST_TMPDIR/.env"
+    printf 'DB_CONNECTION=sqlite\nDB_DATABASE=old\n' > "$file"
+
+    set_env_file_value "$file" DB_DATABASE 'database/a&b\1.sqlite'
+
+    [ "$(cat "$file")" = "$(printf 'DB_CONNECTION=sqlite\nDB_DATABASE=database/a&b\\1.sqlite')" ]
+}
+
+@test "appends a missing key on its own line when the file has no trailing newline" {
+    file="$BATS_TEST_TMPDIR/.env"
+    printf 'DB_PASSWORD=secret' > "$file"
+
+    set_env_file_value "$file" DB_DATABASE myapp_wt_feat
+
+    [ "$(cat "$file")" = "$(printf 'DB_PASSWORD=secret\nDB_DATABASE=myapp_wt_feat')" ]
+}
+
+@test "only replaces the exact key" {
+    file="$BATS_TEST_TMPDIR/.env"
+    printf 'DB_DATABASE_URL=keep\nDB_DATABASE=old\n' > "$file"
+
+    set_env_file_value "$file" DB_DATABASE new
+
+    [ "$(cat "$file")" = "$(printf 'DB_DATABASE_URL=keep\nDB_DATABASE=new')" ]
+}

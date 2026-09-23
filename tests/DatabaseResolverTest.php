@@ -41,4 +41,11 @@ class DatabaseResolverTest extends TestCase
 
         DevDatabaseResolver::derive('myapp', str_repeat('a', 64));
     }
+
+    public function test_test_database_requires_test_in_the_base_not_the_worktree_name(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        TestDatabaseResolver::derive('laravel', 'test-refactor');
+    }
 }

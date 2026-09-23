@@ -222,7 +222,9 @@ The database name is derived from the worktree directory:
 {DB_DATABASE}_wt_{worktree-folder-name}
 ```
 
-For example, with `DB_DATABASE=testing` in the main repo's `.env.testing`, a worktree at `../worktrees/my-project/feature-auth` gets database `testing_wt_feature-auth`. The derived name must contain "test", and setup and `vendor/bin/worktree test` refuse any name that matches the main checkout's own test database.
+For example, with `DB_DATABASE=testing` in the main repo's `.env.testing`, a worktree at `../worktrees/my-project/feature-auth` gets database `testing_wt_feature-auth`. The main checkout's `DB_DATABASE` must itself contain "test" (a worktree folder named e.g. `test-refactor` doesn't count), and setup and `vendor/bin/worktree test` refuse any name that matches one of the main checkout's own databases.
+
+Only MySQL/MariaDB test connections get a per-worktree database. For SQLite or anything else, setup leaves `.env.testing` exactly as it was copied.
 
 Because this name is written directly into `.env.testing` at bootstrap time (step 3 above), it applies no matter how you run tests — `vendor/bin/worktree test`, `sail test`, `php artisan test`, `vendor/bin/phpunit`, or anything else that reads `.env.testing` the normal way. `vendor/bin/worktree test` also re-derives and re-creates the database dynamically on every run, so it stays correct even if step 6 failed at setup time (e.g. the database wasn't reachable yet) or the worktree directory gets renamed later.
 
@@ -234,7 +236,7 @@ Each worktree also gets its own development database, so `php artisan migrate` (
 {DB_DATABASE}_wt_{worktree-folder-name}
 ```
 
-For example, with `DB_DATABASE=myapp` in the main repo's `.env`, a worktree at `../worktrees/my-project/feature-auth` gets `myapp_wt_feature-auth`, written into that worktree's `.env`. The main repo's `.env` is never modified. If no valid name can be derived (for example, it would be too long), the worktree's `DB_DATABASE` is left blank rather than pointing at the main checkout's. If the name is fine but the database can't be created, `.env` still points at it; re-run `vendor/bin/worktree setup` once the problem is fixed.
+For example, with `DB_DATABASE=myapp` in the main repo's `.env`, a worktree at `../worktrees/my-project/feature-auth` gets `myapp_wt_feature-auth`, written into that worktree's `.env`. The main repo's `.env` is never modified. If no valid name can be derived (for example, it would be too long), the worktree's `DB_DATABASE` is left blank rather than pointing at the main checkout's. If the name is fine but the database can't be created, `.env` still points at it; re-run `vendor/bin/worktree setup` once the problem is fixed. With the `docker-compose` runtime, setup keeps retrying for up to `WORKTREE_DB_WAIT_SECONDS` (default 30) while a freshly started database container comes up; set it to `0` to fail straight away.
 
 Setup then runs `WORKTREE_DEV_DB_MIGRATE_COMMAND` (default `php artisan migrate --no-interaction`) every time, and `WORKTREE_DEV_DB_SEED_COMMAND` (default `php artisan db:seed --no-interaction`) only when the database was just created, since seeders usually aren't safe to re-run. Set either to an empty value to skip it, or point them at your own scripts for non-Laravel projects:
 
@@ -338,6 +340,9 @@ WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
 WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction
 # WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction
+
+# How long setup waits for a docker-compose database to accept connections
+# WORKTREE_DB_WAIT_SECONDS=30
 ```
 
 ### Laravel Config (optional)

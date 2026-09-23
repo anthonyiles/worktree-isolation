@@ -171,6 +171,8 @@ ENV
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
     [ "$output" = "DB_DATABASE=testing_wt_feature-auth" ]
+    run grep -F -- 'RESOLVER_CLASS=WorktreeIsolation\TestDatabaseResolver' "$DOCKER_LOG"
+    [ "$status" -eq 0 ]
 }
 
 @test "keeps .env.testing on the worktree's database when creating it fails" {
@@ -210,4 +212,43 @@ SCRIPT
     [ "$output" = "DB_DATABASE=" ]
     run grep -- "DevDatabaseResolver" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
+}
+
+@test "leaves a SQLite .env.testing untouched" {
+    printf 'DB_CONNECTION=sqlite\nDB_DATABASE=database/testing.sqlite\n' > "$WORKTREE_DIR/.env.testing"
+    cp "$WORKTREE_DIR/.env.testing" "$MAIN_REPO/.env.testing"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+
+    [ "$(cat "$WORKTREE_DIR/.env.testing")" = "$(cat "$MAIN_REPO/.env.testing")" ]
+    run grep -F -- 'RESOLVER_CLASS=WorktreeIsolation\TestDatabaseResolver' "$DOCKER_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "waits for a Compose database that isn't accepting connections yet" {
+    sed -i.bak 's/^WORKTREE_DB_WAIT_SECONDS=.*/WORKTREE_DB_WAIT_SECONDS=10/' "$WORKTREE_DIR/.worktree-isolation.env"
+    ATTEMPTS="$BATS_TEST_TMPDIR/attempts"
+    echo 0 > "$ATTEMPTS"
+    cat > "$FAKE_BIN/docker" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$*" >> "$DOCKER_LOG"
+if [[ "\$*" == *"php -r"* ]]; then
+    n=\$((\$(cat "$ATTEMPTS") + 1))
+    echo "\$n" > "$ATTEMPTS"
+    (( n > 2 )) || exit 1
+    if [[ "\$*" == *DevDatabaseResolver* ]]; then
+        echo "myapp_wt_feature-auth created"
+    else
+        echo "testing_wt_feature-auth created"
+    fi
+fi
+exit 0
+SCRIPT
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Could not create the test database"* ]]
+    run grep -- "exec -T app php artisan db:seed --no-interaction" "$DOCKER_LOG"
+    [ "$status" -eq 0 ]
 }
