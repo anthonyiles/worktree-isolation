@@ -69,80 +69,15 @@ esac
 # ---------------------------------------------------------------------------
 # Passthrough: run "$COMMAND $@" inside this worktree's runtime target.
 # ---------------------------------------------------------------------------
-# git sets cwd to the worktree root, so this resolves correctly even though
-# the script itself lives in vendor/.
-PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
-
-CONF_FILE="$PROJECT_ROOT/.worktree-isolation.env"
-if [[ -f "$CONF_FILE" ]]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$CONF_FILE"
-    set +a
-fi
-
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/_worktree-lib.sh"
+load_worktree_config
+validate_runtime
 
-RUNTIME="${WORKTREE_RUNTIME:-native}"
-TESTING_ENV_FILE="${WORKTREE_TESTING_ENV_FILE:-.env.testing}"
-# shellcheck disable=SC2034 # read by build_docker_image_args in _worktree-lib.sh
-DB_PER_WORKTREE_KEY="${WORKTREE_DB_PER_WORKTREE_KEY:-TEST_DB_PER_WORKTREE}"
-
-# docker-image driver settings
-IMAGE="${WORKTREE_DOCKER_IMAGE:-}"
-# shellcheck disable=SC2034
-NETWORK="${WORKTREE_DOCKER_NETWORK:-}"
-# shellcheck disable=SC2034
-WORKDIR="${WORKTREE_DOCKER_WORKDIR:-/var/www/html}"
-
-# docker-compose driver settings
-COMPOSE_SERVICE="${WORKTREE_COMPOSE_SERVICE:-app}"
-COMPOSE_FILE_ARGS=()
-if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
-    COMPOSE_FILE_ARGS=(-f "$WORKTREE_COMPOSE_FILE")
-fi
-COMPOSE_PROJECT_BASE="${WORKTREE_COMPOSE_PROJECT_BASE:-$(basename "$PROJECT_ROOT")}"
-COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$COMPOSE_PROJECT_BASE" "$WORKTREE_BASENAME")"
-
-# ---------------------------------------------------------------------------
-# Validate runtime
-# ---------------------------------------------------------------------------
-case "$RUNTIME" in
-    native)
-        ;;
-    docker-compose)
-        if ! docker compose version > /dev/null 2>&1; then
-            echo "Error: 'docker compose' not found. Install Docker with the Compose plugin." >&2
-            exit 1
-        fi
-        ;;
-    docker-image)
-        if [[ -z "$IMAGE" ]]; then
-            echo "Error: WORKTREE_DOCKER_IMAGE must be set for the docker-image runtime." >&2
-            exit 1
-        fi
-        if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
-            echo "Error: Docker image '$IMAGE' not found." >&2
-            echo "Build it first (e.g. 'docker compose build' or 'vendor/bin/sail build')." >&2
-            exit 1
-        fi
-        ;;
-    *)
-        echo "Error: Unknown WORKTREE_RUNTIME '$RUNTIME'. Use: native, docker-compose, or docker-image." >&2
-        exit 1
-        ;;
-esac
-
-# Load testing env vars (DB_*, etc.) so they can be forwarded to docker-image
-# containers, same as vendor/bin/worktree test.
-if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$PROJECT_ROOT/$TESTING_ENV_FILE"
-    set +a
-fi
+# .env.testing is deliberately not loaded: passthrough runs against the app's
+# own environment, not the test database.
+IS_TTY=false
+[[ -t 0 && -t 1 ]] && IS_TTY=true
 
 case "$RUNTIME" in
     native)
@@ -150,25 +85,19 @@ case "$RUNTIME" in
         ;;
 
     docker-compose)
-        # -T disables the pseudo-tty, which breaks interactive commands
-        # (npm run dev, php artisan tinker) but is required for non-TTY
-        # contexts (CI, agents, piped output). Only allocate one when stdout
-        # is actually a terminal.
-        TTY_ARGS=(-T)
-        [[ -t 1 ]] && TTY_ARGS=()
-        exec docker compose -p "$COMPOSE_PROJECT_NAME" "${COMPOSE_FILE_ARGS[@]}" exec "${TTY_ARGS[@]}" \
-            "$COMPOSE_SERVICE" "$COMMAND" "$@"
+        EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec)
+        [[ "$IS_TTY" == true ]] || EXEC_ARGS+=(-T)
+        exec "${EXEC_ARGS[@]}" "$COMPOSE_SERVICE" "$COMMAND" "$@"
         ;;
 
     docker-image)
         build_docker_image_args
-
-        TTY_ARGS=()
-        [[ -t 1 ]] && TTY_ARGS=(-it)
+        DOCKER_ARGS+=(-i)
+        [[ "$IS_TTY" == true ]] && DOCKER_ARGS+=(-t)
 
         # Overriding --entrypoint with the passthrough command's first token
         # is the same pattern worktree-setup uses per-command (--entrypoint
         # composer / --entrypoint npm), generalized to any command.
-        exec "${DOCKER_ARGS[@]}" "${TTY_ARGS[@]}" --entrypoint "$COMMAND" "$IMAGE" "$@"
+        exec "${DOCKER_ARGS[@]}" --entrypoint "$COMMAND" "$IMAGE" "$@"
         ;;
 esac

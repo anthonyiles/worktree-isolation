@@ -19,22 +19,6 @@
 # straight into this file); not itself exposed as a Composer bin.
 set -euo pipefail
 
-# This script runs from inside vendor/, not the project root —
-# resolve via git instead.
-PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
-
-# ---------------------------------------------------------------------------
-# 0. Load configuration
-# ---------------------------------------------------------------------------
-CONF_FILE="$PROJECT_ROOT/.worktree-isolation.env"
-if [[ -f "$CONF_FILE" ]]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$CONF_FILE"
-    set +a
-fi
-
 # This file can still be invoked through a symlink (bats tests do this), so
 # keep resolving one defensively even though vendor/bin/worktree calls it by
 # a direct, non-symlinked path. readlink -f isn't portable (no -f on macOS's
@@ -53,59 +37,16 @@ SCRIPT_DIR="$(resolve_script_dir)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/_worktree-lib.sh"
 
-RUNTIME="${WORKTREE_RUNTIME:-native}"
+# ---------------------------------------------------------------------------
+# 0. Load configuration
+# ---------------------------------------------------------------------------
+load_worktree_config
 TEST_COMMAND="${WORKTREE_TEST_COMMAND:-php artisan test}"
-TESTING_ENV_FILE="${WORKTREE_TESTING_ENV_FILE:-.env.testing}"
-DB_PER_WORKTREE_KEY="${WORKTREE_DB_PER_WORKTREE_KEY:-TEST_DB_PER_WORKTREE}"
-RESOLVER_CLASS="${WORKTREE_RESOLVER_CLASS:-WorktreeIsolation\\TestDatabaseResolver}"
-
-# docker-image driver settings
-IMAGE="${WORKTREE_DOCKER_IMAGE:-}"
-# shellcheck disable=SC2034 # read by build_docker_image_args in _worktree-lib.sh
-NETWORK="${WORKTREE_DOCKER_NETWORK:-}"
-# shellcheck disable=SC2034
-WORKDIR="${WORKTREE_DOCKER_WORKDIR:-/var/www/html}"
-
-# docker-compose driver settings
-COMPOSE_SERVICE="${WORKTREE_COMPOSE_SERVICE:-app}"
-COMPOSE_FILE_OPT=""
-if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
-    COMPOSE_FILE_OPT="-f $WORKTREE_COMPOSE_FILE"
-fi
-# The env var is normally set by worktree-install; the fallback here is just
-# a safety net for a .worktree-isolation.env written before this feature
-# existed. Unlike worktree-setup, there's no MAIN_REPO to fall back to here.
-COMPOSE_PROJECT_BASE="${WORKTREE_COMPOSE_PROJECT_BASE:-$(basename "$PROJECT_ROOT")}"
-COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$COMPOSE_PROJECT_BASE" "$WORKTREE_BASENAME")"
 
 # ---------------------------------------------------------------------------
 # 1. Validate runtime
 # ---------------------------------------------------------------------------
-case "$RUNTIME" in
-    native)
-        ;;
-    docker-compose)
-        if ! docker compose version > /dev/null 2>&1; then
-            echo "Error: 'docker compose' not found. Install Docker with the Compose plugin." >&2
-            exit 1
-        fi
-        ;;
-    docker-image)
-        if [[ -z "$IMAGE" ]]; then
-            echo "Error: WORKTREE_DOCKER_IMAGE must be set for the docker-image runtime." >&2
-            exit 1
-        fi
-        if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
-            echo "Error: Docker image '$IMAGE' not found." >&2
-            echo "Build it first (e.g. 'docker compose build' or 'vendor/bin/sail build')." >&2
-            exit 1
-        fi
-        ;;
-    *)
-        echo "Error: Unknown WORKTREE_RUNTIME '$RUNTIME'. Use: native, docker-compose, or docker-image." >&2
-        exit 1
-        ;;
-esac
+validate_runtime
 
 # ---------------------------------------------------------------------------
 # 2. Load testing env vars
@@ -120,7 +61,6 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Inline PHP that derives and creates the per-worktree database.
 # ---------------------------------------------------------------------------
-# build_docker_image_args (used below) comes from _worktree-lib.sh.
 # The autoload path placeholder is replaced per-driver.
 DB_ENSURE_PHP='
     require "__AUTOLOAD__";
@@ -155,8 +95,7 @@ if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ ]]; then
             ;;
 
         docker-compose)
-            # shellcheck disable=SC2086
-            docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILE_OPT exec -T \
+            "${COMPOSE_ARGS[@]}" exec -T \
                 -e "RESOLVER_CLASS=$RESOLVER_CLASS" \
                 -e "WORKTREE_BASENAME=$WORKTREE_BASENAME" \
                 -e "TEST_COMMAND=$TEST_COMMAND" \
@@ -190,6 +129,7 @@ if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ ]]; then
 
         docker-image)
             build_docker_image_args
+            forward_testing_env_vars
             DOCKER_ARGS+=(-e "WORKTREE_BASENAME=$WORKTREE_BASENAME")
             DOCKER_ARGS+=(-e "TEST_COMMAND=$TEST_COMMAND")
 
@@ -222,14 +162,14 @@ else
             $TEST_COMMAND "$@"
             ;;
         docker-compose)
-            # shellcheck disable=SC2086
-            docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILE_OPT exec -T \
+            "${COMPOSE_ARGS[@]}" exec -T \
                 -e "TEST_COMMAND=$TEST_COMMAND" \
                 "$COMPOSE_SERVICE" \
                 bash -c '$TEST_COMMAND "$@"' -- "$@"
             ;;
         docker-image)
             build_docker_image_args
+            forward_testing_env_vars
             DOCKER_ARGS+=(-e "TEST_COMMAND=$TEST_COMMAND")
             exec "${DOCKER_ARGS[@]}" --entrypoint bash "$IMAGE" -c '$TEST_COMMAND "$@"' -- "$@"
             ;;

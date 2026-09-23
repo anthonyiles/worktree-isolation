@@ -4,19 +4,23 @@
 declare(strict_types=1);
 
 /**
- * Cleanup script for per-worktree test databases. Invoked as
+ * Cleanup script for per-worktree test and development databases. Invoked as
  * `vendor/bin/worktree clean` (stubs/bin/worktree dispatches straight into
  * this file); not itself exposed as a Composer bin.
  *
  * No framework dependencies — uses only PDO.
  * Laravel projects can also use `php artisan worktree:clean` which delegates here.
  *
- * Reads DB credentials from .worktree-isolation.env and/or .env.testing.
+ * Reads DB credentials from .env.testing (test) and .env (development).
  *
  * Usage:
  *   vendor/bin/worktree clean
  *   vendor/bin/worktree clean --force
  */
+
+// Must match WorktreeIsolation\DevDatabaseResolver::MARKER; this script
+// runs without the package autoloader.
+const DEV_DB_MARKER = '_wt_';
 
 $opts = getopt('', ['force', 'project-dir:', 'help']);
 
@@ -24,7 +28,8 @@ if (isset($opts['help'])) {
     fwrite(STDOUT, <<<HELP
     Usage: vendor/bin/worktree clean [OPTIONS]
 
-    Drops all per-worktree test databases matching the "{base}-*" pattern.
+    Drops all per-worktree test databases ("{base}-*", from .env.testing) and
+    development databases ("{base}_wt_*", from .env).
 
     Options:
       --force            Drop databases without confirmation
@@ -38,42 +43,45 @@ if (isset($opts['help'])) {
 $force = isset($opts['force']);
 $projectDir = $opts['project-dir'] ?? resolveProjectRoot();
 
-$env = loadEnvFiles($projectDir);
+$targets = cleanupTargets($projectDir);
 
-$host = $env['DB_HOST'] ?? '127.0.0.1';
-$port = (int) ($env['DB_PORT'] ?? 3306);
-$user = $env['DB_USERNAME'] ?? '';
-$password = $env['DB_PASSWORD'] ?? '';
-$baseDb = $env['DB_DATABASE'] ?? 'testing';
+$found = [];
+foreach ($targets as $target) {
+    $env = $target['env'];
+    $host = $env['DB_HOST'] ?? '127.0.0.1';
+    $port = (int) ($env['DB_PORT'] ?? 3306);
 
-$pattern = "$baseDb-%";
+    try {
+        $pdo = new PDO("mysql:host=$host;port=$port", $env['DB_USERNAME'] ?? '', $env['DB_PASSWORD'] ?? '', [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        ]);
+    } catch (PDOException $e) {
+        fwrite(STDERR, "Error: Could not connect to database at $host:$port\n");
+        fwrite(STDERR, "  " . $e->getMessage() . "\n\n");
+        fwrite(STDERR, "  Check DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD in {$target['file']}\n");
+        exit(1);
+    }
 
-try {
-    $dsn = "mysql:host=$host;port=$port";
-    $pdo = new PDO($dsn, $user, $password, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-    ]);
-} catch (PDOException $e) {
-    fwrite(STDERR, "Error: Could not connect to database at $host:$port\n");
-    fwrite(STDERR, "  " . $e->getMessage() . "\n\n");
-    fwrite(STDERR, "  Check DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD in .env.testing\n");
-    exit(1);
+    $stmt = $pdo->prepare('SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?');
+    $stmt->execute([$target['pattern']]);
+    $databases = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+    if (empty($databases)) {
+        echo "No per-worktree {$target['label']} databases found (pattern: {$target['pattern']}).\n";
+        continue;
+    }
+
+    echo 'Found ' . count($databases) . " per-worktree {$target['label']} database(s):\n";
+    foreach ($databases as $name) {
+        echo "  - $name\n";
+        $found[] = [$pdo, $name];
+    }
+    echo "\n";
 }
 
-$stmt = $pdo->prepare('SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?');
-$stmt->execute([$pattern]);
-$databases = $stmt->fetchAll(PDO::FETCH_COLUMN);
-
-if (empty($databases)) {
-    echo "No per-worktree test databases found (pattern: $pattern).\n";
+if (empty($found)) {
     exit(0);
 }
-
-echo 'Found ' . count($databases) . " per-worktree test database(s):\n";
-foreach ($databases as $name) {
-    echo "  - $name\n";
-}
-echo "\n";
 
 if (! $force) {
     echo 'Drop all of these databases? [y/N] ';
@@ -85,7 +93,7 @@ if (! $force) {
 }
 
 $dropped = 0;
-foreach ($databases as $name) {
+foreach ($found as [$pdo, $name]) {
     if (preg_match('/^[a-z0-9_-]+$/', $name) !== 1) {
         echo "  Skipping: $name (contains invalid characters)\n";
         continue;
@@ -116,27 +124,49 @@ function resolveProjectRoot(): string
     return $toplevel !== '' ? $toplevel : getcwd();
 }
 
-function loadEnvFiles(string $projectDir): array
+/**
+ * @return list<array{label: string, file: string, env: array<string, string>, pattern: string}>
+ */
+function cleanupTargets(string $projectDir): array
 {
-    $env = [];
+    $conf = parseEnvFile("$projectDir/.worktree-isolation.env");
 
-    $confFile = "$projectDir/.worktree-isolation.env";
-    if (file_exists($confFile)) {
-        $env = array_merge($env, parseEnvFile($confFile));
+    $testingFile = $conf['WORKTREE_TESTING_ENV_FILE'] ?? '.env.testing';
+    $testingEnv = parseEnvFile("$projectDir/$testingFile");
+    $targets = [[
+        'label' => 'test',
+        'file' => $testingFile,
+        'env' => $testingEnv,
+        'pattern' => escapeLike($testingEnv['DB_DATABASE'] ?? 'testing') . '-%',
+    ]];
+
+    $devEnabled = in_array($conf['WORKTREE_DEV_DB_PER_WORKTREE'] ?? 'true', ['true', '1'], true);
+    $devEnv = parseEnvFile("$projectDir/.env");
+    $devBase = explode(DEV_DB_MARKER, $devEnv['DB_DATABASE'] ?? '', 2)[0];
+    if ($devEnabled && $devBase !== '' && in_array($devEnv['DB_CONNECTION'] ?? '', ['mysql', 'mariadb'], true)) {
+        $targets[] = [
+            'label' => 'development',
+            'file' => '.env',
+            'env' => $devEnv,
+            'pattern' => escapeLike($devBase . DEV_DB_MARKER) . '%',
+        ];
     }
 
-    $testingEnvFile = $env['WORKTREE_TESTING_ENV_FILE'] ?? '.env.testing';
-    $testingPath = "$projectDir/$testingEnvFile";
-    if (file_exists($testingPath)) {
-        $env = array_merge($env, parseEnvFile($testingPath));
-    }
+    return $targets;
+}
 
-    return $env;
+function escapeLike(string $value): string
+{
+    return addcslashes($value, '%_\\');
 }
 
 function parseEnvFile(string $path): array
 {
     $env = [];
+    if (! file_exists($path)) {
+        return $env;
+    }
+
     $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
 
     foreach ($lines as $line) {
@@ -150,7 +180,7 @@ function parseEnvFile(string $path): array
         }
         $key = trim(substr($line, 0, $pos));
         $value = trim(substr($line, $pos + 1));
-        $env[$key] = $value;
+        $env[$key] = trim($value, '"\'');
     }
 
     return $env;

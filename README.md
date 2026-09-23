@@ -1,6 +1,6 @@
 # Worktree Isolation
 
-Per-worktree test database isolation and bootstrap automation for PHP projects.
+Per-worktree database isolation and bootstrap automation for PHP projects.
 
 Works with **any PHP project** and **any development environment**: native PHP (Herd, Valet), Docker Compose, Laravel Sail, or any standalone Docker image. No framework required — Laravel integration is included but optional.
 
@@ -9,7 +9,7 @@ Works with **any PHP project** and **any development environment**: native PHP (
 When using `git worktree` with a PHP project, each worktree needs:
 - Composer and npm dependencies installed
 - Environment files (`.env`, `.env.testing`) configured
-- An isolated test database to avoid conflicts with other worktrees running in parallel
+- Isolated test and development databases, so parallel worktrees (and agents running migrations in them) never touch each other's or the main checkout's data
 
 This package automates all of that. After installation, every `git worktree add` automatically bootstraps the new worktree — no manual steps required.
 
@@ -17,7 +17,7 @@ This package automates all of that. After installation, every `git worktree add`
 
 - PHP 8.2+
 - Git 2.54+ (for config-based hooks)
-- MySQL (for per-worktree database isolation)
+- MySQL or MariaDB (for per-worktree database isolation)
 
 ## Installation
 
@@ -47,6 +47,11 @@ Whichever runtime you pick below, `vendor/bin/worktree install` always writes th
 WORKTREE_TESTING_ENV_FILE=.env.testing
 WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
 WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
+
+# Per-worktree development database (see "Per-Worktree Development Databases")
+# WORKTREE_DEV_DB_PER_WORKTREE=true
+# WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction
+# WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction
 ```
 
 Non-Laravel projects should also set `WORKTREE_TEST_COMMAND` — see [Custom Test Command](#custom-test-command).
@@ -205,8 +210,9 @@ When you run `git worktree add`, the `post-checkout` hook detects the new worktr
 3. Forces `TEST_DB_PER_WORKTREE=true` in the worktree's `.env.testing`
 4. For the `docker-compose` runtime: brings up this worktree's own Compose stack (`docker compose -p <isolated-project-name> up -d`)
 5. Runs `composer install` (via the configured runtime)
-6. Derives the per-worktree database name, creates it, and writes it as `DB_DATABASE` in the worktree's `.env.testing`
-7. Runs `npm install` (via the configured runtime)
+6. Derives the per-worktree test database name, creates it, and writes it as `DB_DATABASE` in the worktree's `.env.testing`
+7. Derives the per-worktree development database name, creates it, writes it as `DB_DATABASE` in the worktree's `.env`, then migrates it (and seeds it, if it was just created)
+8. Runs `npm install` (via the configured runtime)
 
 ### Per-Worktree Test Databases
 
@@ -218,7 +224,25 @@ testing-{worktree-folder-name}
 
 For example, a worktree at `../worktrees/my-project/feature-auth` gets database `testing-feature-auth`. A safety guard ensures the derived name always contains "test" to prevent accidental use of production databases.
 
-Because this name is written directly into `.env.testing` at bootstrap time (step 5 above), it applies no matter how you run tests — `vendor/bin/worktree test`, `sail test`, `php artisan test`, `vendor/bin/phpunit`, or anything else that reads `.env.testing` the normal way. `vendor/bin/worktree test` also re-derives and re-creates the database dynamically on every run, so it stays correct even if step 5 failed at setup time (e.g. the database wasn't reachable yet) or the worktree directory gets renamed later.
+Because this name is written directly into `.env.testing` at bootstrap time (step 6 above), it applies no matter how you run tests — `vendor/bin/worktree test`, `sail test`, `php artisan test`, `vendor/bin/phpunit`, or anything else that reads `.env.testing` the normal way. `vendor/bin/worktree test` also re-derives and re-creates the database dynamically on every run, so it stays correct even if step 6 failed at setup time (e.g. the database wasn't reachable yet) or the worktree directory gets renamed later.
+
+### Per-Worktree Development Databases
+
+Each worktree also gets its own development database, so `php artisan migrate` (or an agent running it) in a feature branch never touches the main checkout's data:
+
+```
+{DB_DATABASE}_wt_{worktree-folder-name}
+```
+
+For example, with `DB_DATABASE=myapp` in the main repo's `.env`, a worktree at `../worktrees/my-project/feature-auth` gets `myapp_wt_feature-auth`, written into that worktree's `.env`. The main repo's `.env` is never modified.
+
+Setup then runs `WORKTREE_DEV_DB_MIGRATE_COMMAND` (default `php artisan migrate --no-interaction`) every time, and `WORKTREE_DEV_DB_SEED_COMMAND` (default `php artisan db:seed --no-interaction`) only when the database was just created, since seeders usually aren't safe to re-run. Set either to an empty value to skip it, or point them at your own scripts for non-Laravel projects:
+
+```env
+WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --class=DemoSeeder --no-interaction
+```
+
+Only MySQL/MariaDB connections are handled; setup skips the step for anything else. SQLite needs nothing extra when the database file lives inside the project, since each worktree has its own copy. To keep sharing one development database across worktrees, set `WORKTREE_DEV_DB_PER_WORKTREE=false`.
 
 ### Running Tests
 
@@ -232,7 +256,7 @@ vendor/bin/worktree test tests/Feature/MyTest.php     # specific file
 
 ### Running Arbitrary Commands
 
-`vendor/bin/worktree setup` only ever runs `composer install`/`npm install`, and `vendor/bin/worktree test` only runs your configured test command. For everything else — `composer require`, `npm run build`, `npm run dev`, `php artisan migrate`, or any other command — pass it straight to `vendor/bin/worktree`:
+`vendor/bin/worktree setup` only runs its fixed bootstrap steps, and `vendor/bin/worktree test` only runs your configured test command. For everything else — `composer require`, `npm run build`, `npm run dev`, `php artisan migrate`, or any other command — pass it straight to `vendor/bin/worktree`:
 
 ```bash
 vendor/bin/worktree composer require guzzlehttp/guzzle
@@ -245,6 +269,8 @@ It dispatches through the same runtime resolution as `vendor/bin/worktree test` 
 - `native` — runs the command directly on the host.
 - `docker-compose` — runs it via `docker compose -p <isolated-project> exec` in this worktree's own service container.
 - `docker-image` — runs it via a throwaway `docker run --rm -v <this-worktree>:...` against the built image, same as `vendor/bin/worktree test`.
+
+Unlike `vendor/bin/worktree test`, passthrough commands don't load `.env.testing`. `worktree php artisan migrate` runs against the worktree's `.env`, which means its own [development database](#per-worktree-development-databases).
 
 `install`, `setup`, `test`, and `clean` are its own built-in subcommands (covered above) — everything else is passthrough. Alias it for a Sail-like feel:
 
@@ -260,14 +286,14 @@ worktree clean
 
 ### Cleaning Up
 
-Drop all per-worktree test databases:
+Drop all per-worktree test and development databases:
 
 ```bash
 vendor/bin/worktree clean
 # or: php artisan worktree:clean  (Laravel projects)
 ```
 
-This lists all databases matching the `{base}-*` pattern and asks for confirmation before dropping them. Use `--force` to skip the prompt.
+This lists all databases matching `{base}-*` (test, from `.env.testing`) and `{base}_wt_*` (development, from `.env`) and asks for confirmation before dropping them. Use `--force` to skip the prompt.
 
 ## Configuration
 
@@ -307,6 +333,11 @@ WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
 
 # Additional env vars to forward to the test container (docker-image only)
 # WORKTREE_EXTRA_ENV_VARS=
+
+# --- Per-worktree development database ---
+# WORKTREE_DEV_DB_PER_WORKTREE=true
+# WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction
+# WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction
 ```
 
 ### Laravel Config (optional)
@@ -328,7 +359,7 @@ This creates `config/worktree-isolation.php` which mirrors the `.worktree-isolat
 | `vendor/bin/worktree install` | Install/configure worktree isolation (no framework needed) |
 | `vendor/bin/worktree setup` | Bootstrap a worktree (env files, dependencies) — normally run automatically by the git hook |
 | `vendor/bin/worktree test` | Run tests with per-worktree database isolation |
-| `vendor/bin/worktree clean` | Drop per-worktree test databases (no framework needed) |
+| `vendor/bin/worktree clean` | Drop per-worktree test and development databases (no framework needed) |
 | `vendor/bin/worktree <anything else>` | Run that command inside the current worktree's runtime (`composer`, `npm`, `artisan`, ...) |
 
 ## AI Agent Integration
@@ -344,7 +375,7 @@ always run commands through `vendor/bin/worktree` — `vendor/bin/worktree test`
 `vendor/bin/worktree php artisan ...` — never call `sail`, `docker compose`, `composer`, `npm`,
 or `php artisan` directly. Those can silently execute inside another worktree's (or the main
 checkout's) container. `vendor/bin/worktree` handles runtime dispatch (native, Docker Compose,
-Sail) on top of the per-worktree database isolation already active in .env.testing.
+Sail) on top of the per-worktree database isolation already active in .env and .env.testing.
 ```
 
 ## License

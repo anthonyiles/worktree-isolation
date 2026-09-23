@@ -38,3 +38,33 @@ setup() {
     run grep -c -- "up -d" "$DOCKER_LOG"
     [ "$output" -ge 1 ]
 }
+
+@test "keeps a compose file path with spaces as a single argument" {
+    log_docker_argv
+    echo "WORKTREE_COMPOSE_FILE=\"my compose.yml\"" >> "$WORKTREE_DIR/.worktree-isolation.env"
+
+    run bash "$STUBS_DIR/worktree" php -v
+    [ "$status" -eq 0 ]
+
+    run grep -F -- "[-f] [my compose.yml]" "$DOCKER_ARGV_LOG"
+    [ "$status" -eq 0 ]
+}
+
+@test "disables the pseudo-tty when stdin/stdout aren't terminals" {
+    run bash "$STUBS_DIR/worktree" php -v < /dev/null
+    [ "$status" -eq 0 ]
+
+    run grep -- " exec -T app php -v" "$DOCKER_LOG"
+    [ "$status" -eq 0 ]
+}
+
+@test "fails when WORKTREE_COMPOSE_PROJECT_BASE is unset instead of guessing a project name" {
+    sed -i.bak '/^WORKTREE_COMPOSE_PROJECT_BASE=/d' "$WORKTREE_DIR/.worktree-isolation.env"
+
+    run bash "$STUBS_DIR/worktree" php -v
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"WORKTREE_COMPOSE_PROJECT_BASE must be set"* ]]
+
+    run grep -- " exec " "$DOCKER_LOG"
+    [ "$status" -ne 0 ]
+}

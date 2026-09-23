@@ -79,8 +79,8 @@ if (! verifyGitVersion()) {
 }
 
 // 2. Create .worktree-isolation.env — the only file this installer writes
-// into the project. worktree-setup/test/worktree-clean/worktree-install run
-// straight from vendor/bin/ (Composer's "bin" declaration).
+// into the project. Everything else runs from vendor/ via vendor/bin/worktree
+// (the only Composer "bin"), which dispatches to the sibling scripts.
 createEnvConfig($projectDir, $runtime, $opts, $force);
 
 // 3. Configure git hooks
@@ -231,6 +231,11 @@ function createEnvConfig(string $projectDir, string $runtime, array $opts, bool 
     $lines[] = '';
     $lines[] = '# Additional env vars to pass to the test container (space-separated, docker-image only)';
     $lines[] = '# WORKTREE_EXTRA_ENV_VARS=';
+    $lines[] = '';
+    $lines[] = '# Per-worktree development database (MySQL/MariaDB)';
+    $lines[] = '# WORKTREE_DEV_DB_PER_WORKTREE=true';
+    $lines[] = '# WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction';
+    $lines[] = '# WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction';
     $lines[] = '';
 
     file_put_contents($envFile, implode("\n", $lines));
