@@ -37,7 +37,7 @@ alias worktree='vendor/bin/worktree'
 
 [Running Arbitrary Commands](#running-arbitrary-commands) covers the passthrough form in full.
 
-Whichever runtime you pick below, `vendor/bin/worktree install` always writes these same lines to `.worktree-isolation.env` — identical in every scenario, so they're covered once here instead of three times:
+Whichever runtime you pick below, `vendor/bin/worktree install` always writes these same lines to `.worktree-isolation.env`:
 
 ```env
 # Test command (default: php artisan test)
