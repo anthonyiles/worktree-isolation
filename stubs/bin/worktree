@@ -61,16 +61,16 @@ case "$COMMAND" in
         exit 0
         ;;
     install)
-        exec "$SCRIPT_DIR/worktree-install" "$@"
+        exec php "$SCRIPT_DIR/worktree-install" "$@"
         ;;
     setup)
-        exec "$SCRIPT_DIR/worktree-setup" "$@"
+        exec bash "$SCRIPT_DIR/worktree-setup" "$@"
         ;;
     test)
-        exec "$SCRIPT_DIR/test" "$@"
+        exec bash "$SCRIPT_DIR/test" "$@"
         ;;
     clean)
-        exec "$SCRIPT_DIR/worktree-clean" "$@"
+        exec php "$SCRIPT_DIR/worktree-clean" "$@"
         ;;
 esac
 

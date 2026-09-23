@@ -35,8 +35,8 @@ fi
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SETUP_SCRIPT="$HOOK_DIR/../bin/worktree-setup"
 
-if [[ ! -x "$SETUP_SCRIPT" ]]; then
-    echo "[post-checkout] worktree-setup not found or not executable at $SETUP_SCRIPT, skipping."
+if [[ ! -f "$SETUP_SCRIPT" ]]; then
+    echo "[post-checkout] worktree-setup not found at $SETUP_SCRIPT, skipping."
     exit 0
 fi
 
@@ -44,4 +44,4 @@ echo ""
 echo "[post-checkout] New worktree detected — running worktree-setup..."
 echo ""
 
-exec "$SETUP_SCRIPT"
+exec bash "$SETUP_SCRIPT"

@@ -247,11 +247,13 @@ function configureGitHooks(string $projectDir, string $stubsDir): void
     // hook.*.command must be an absolute path: git resolves a relative one
     // against the cwd of whatever worktree is running the hook (the new
     // worktree, for post-checkout), not the main repo.
-    $hookScript = "$stubsDir/githooks/post-checkout-worktree-setup.sh";
+    // Run through bash so it works even when Composer didn't keep the
+    // executable bit (zip dists without unzip).
+    $hookCommand = 'bash ' . escapeshellarg("$stubsDir/githooks/post-checkout-worktree-setup.sh");
 
     exec(
         'cd ' . escapeshellarg($projectDir)
-            . ' && git config --local hook.worktree-setup.command ' . escapeshellarg($hookScript)
+            . ' && git config --local hook.worktree-setup.command ' . escapeshellarg($hookCommand)
             . ' && git config --local --replace-all hook.worktree-setup.event post-checkout 2>&1',
         $output,
         $exitCode
@@ -262,7 +264,7 @@ function configureGitHooks(string $projectDir, string $stubsDir): void
     } else {
         echo "  Warning: Could not configure git hooks automatically.\n";
         echo "  Run manually:\n";
-        echo '    git config --local hook.worktree-setup.command ' . escapeshellarg($hookScript) . "\n";
+        echo '    git config --local hook.worktree-setup.command ' . escapeshellarg($hookCommand) . "\n";
         echo "    git config --local --replace-all hook.worktree-setup.event post-checkout\n";
     }
 }

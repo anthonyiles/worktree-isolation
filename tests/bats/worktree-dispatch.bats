@@ -4,7 +4,9 @@
 # known subcommand delegates to its sibling script with args forwarded.
 # Sibling scripts are faked out here since they already have their own test
 # suites (worktree-setup-compose.bats, test-compose.bats, etc.) — this file
-# only covers the dispatcher's own routing logic.
+# only covers the dispatcher's own routing logic. The fakes are deliberately
+# not executable: Composer doesn't always keep the sub-scripts' executable
+# bit, so the dispatcher must run them through their interpreter.
 
 setup() {
     REAL_STUBS_DIR="$(cd "$BATS_TEST_DIRNAME/../../stubs/bin" && pwd)"
@@ -17,13 +19,18 @@ setup() {
     LOG="$BATS_TEST_TMPDIR/calls.log"
     : > "$LOG"
 
-    for name in worktree-install worktree-setup test worktree-clean; do
+    for name in worktree-setup test; do
         cat > "$DISPATCH_DIR/$name" <<SCRIPT
 #!/usr/bin/env bash
 echo "$name \$*" >> "$LOG"
-exit 0
 SCRIPT
-        chmod +x "$DISPATCH_DIR/$name"
+    done
+    for name in worktree-install worktree-clean; do
+        cat > "$DISPATCH_DIR/$name" <<SCRIPT
+#!/usr/bin/env php
+<?php
+file_put_contents('$LOG', '$name ' . implode(' ', array_slice(\$argv, 1)) . "\\n", FILE_APPEND);
+SCRIPT
     done
 }
 
