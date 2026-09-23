@@ -129,24 +129,10 @@ run_in_runtime composer install --no-interaction --no-progress
 # ---------------------------------------------------------------------------
 # 6. Per-worktree databases
 # ---------------------------------------------------------------------------
-ENSURE_DB_PHP='
-    require "vendor/autoload.php";
-    $class = getenv("RESOLVER_CLASS");
-    $name = $class::derive(getenv("DB_DATABASE"), getenv("WORKTREE_BASENAME"));
-    $created = $class::ensureExists(
-        $name,
-        getenv("DB_HOST") ?: "127.0.0.1",
-        (int) (getenv("DB_PORT") ?: 3306),
-        getenv("DB_USERNAME") ?: "",
-        getenv("DB_PASSWORD") ?: "",
-    );
-    echo $name, $created === true ? " created" : " existing";
-'
-
 # Prints "<name> created|existing".
 ensure_worktree_database() {
-    local env_file="$1" resolver="$2" base_db="$3"
-    run_in_runtime \
+    local env_file="$1" resolver="$2" base_db="$3" output
+    output="$(run_in_runtime \
         -e "RESOLVER_CLASS=$resolver" \
         -e "WORKTREE_BASENAME=$WORKTREE_BASENAME" \
         -e "DB_DATABASE=$base_db" \
@@ -154,7 +140,8 @@ ensure_worktree_database() {
         -e "DB_PORT=$(env_file_value "$env_file" DB_PORT)" \
         -e "DB_USERNAME=$(env_file_value "$env_file" DB_USERNAME)" \
         -e "DB_PASSWORD=$(env_file_value "$env_file" DB_PASSWORD)" \
-        php -r "$ENSURE_DB_PHP"
+        php -r "$ENSURE_DB_PHP")" || return
+    parse_ensure_db_output "$output"
 }
 
 # Writing DB_DATABASE into $TESTING_ENV_FILE means sail test, artisan test,
@@ -167,7 +154,7 @@ if [[ -f "$TESTING_ENV_PATH" ]]; then
     base_db="$(env_file_value "$TESTING_ENV_PATH" DB_DATABASE)"
     # A DB failure here (MySQL down, bad creds, missing driver) must not abort
     # setup; vendor/bin/worktree test retries this derivation later.
-    if result="$(ensure_worktree_database "$TESTING_ENV_PATH" "$RESOLVER_CLASS" "${base_db:-testing}")" && [[ -n "$result" ]]; then
+    if result="$(ensure_worktree_database "$TESTING_ENV_PATH" "$RESOLVER_CLASS" "${base_db:-testing}")"; then
         set_env_file_value "$TESTING_ENV_PATH" DB_DATABASE "${result%% *}"
         echo "Set DB_DATABASE=${result%% *} in $TESTING_ENV_FILE"
     else
@@ -176,7 +163,9 @@ if [[ -f "$TESTING_ENV_PATH" ]]; then
     fi
 fi
 
-DEV_DB_PER_WORKTREE="${WORKTREE_DEV_DB_PER_WORKTREE:-true}"
+# Off unless configured, so upgrading doesn't start rewriting .env for
+# projects installed before this existed; install writes it as true.
+DEV_DB_PER_WORKTREE="${WORKTREE_DEV_DB_PER_WORKTREE:-false}"
 DEV_DB_MIGRATE_COMMAND="${WORKTREE_DEV_DB_MIGRATE_COMMAND-php artisan migrate --no-interaction}"
 DEV_DB_SEED_COMMAND="${WORKTREE_DEV_DB_SEED_COMMAND-php artisan db:seed --no-interaction}"
 ENV_PATH="$PROJECT_ROOT/.env"
@@ -191,7 +180,7 @@ if [[ "$DEV_DB_PER_WORKTREE" =~ ^(true|1)$ && -f "$ENV_PATH" ]]; then
         echo "Skipping: only MySQL/MariaDB are supported (DB_CONNECTION=${connection:-unset})."
     elif [[ -z "$base_db" ]]; then
         echo "Skipping: DB_DATABASE is not set in .env."
-    elif result="$(ensure_worktree_database "$ENV_PATH" 'WorktreeIsolation\DevDatabaseResolver' "$base_db")" && [[ -n "$result" ]]; then
+    elif result="$(ensure_worktree_database "$ENV_PATH" 'WorktreeIsolation\DevDatabaseResolver' "$base_db")"; then
         set_env_file_value "$ENV_PATH" DB_DATABASE "${result%% *}"
         echo "Set DB_DATABASE=${result%% *} in .env"
 

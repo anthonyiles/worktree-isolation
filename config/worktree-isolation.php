@@ -167,11 +167,12 @@ return [
     | When enabled, worktree setup points each worktree's .env at its own
     | "{DB_DATABASE}_wt_{worktree-basename}" database, runs the migrate
     | command, and runs the seed command when the database is new. Set a
-    | command to an empty string to skip it.
+    | command to an empty string to skip it. Off unless set; the installer
+    | writes WORKTREE_DEV_DB_PER_WORKTREE=true for new projects.
     |
     */
 
-    'dev_db_per_worktree' => env('WORKTREE_DEV_DB_PER_WORKTREE', true),
+    'dev_db_per_worktree' => env('WORKTREE_DEV_DB_PER_WORKTREE', false),
 
     'dev_db_migrate_command' => env('WORKTREE_DEV_DB_MIGRATE_COMMAND', 'php artisan migrate --no-interaction'),
 

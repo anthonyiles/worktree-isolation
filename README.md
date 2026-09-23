@@ -49,7 +49,7 @@ WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
 WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
 
 # Per-worktree development database (see "Per-Worktree Development Databases")
-# WORKTREE_DEV_DB_PER_WORKTREE=true
+WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction
 # WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction
 ```
@@ -211,7 +211,7 @@ When you run `git worktree add`, the `post-checkout` hook detects the new worktr
 4. For the `docker-compose` runtime: brings up this worktree's own Compose stack (`docker compose -p <isolated-project-name> up -d`)
 5. Runs `composer install` (via the configured runtime)
 6. Derives the per-worktree test database name, creates it, and writes it as `DB_DATABASE` in the worktree's `.env.testing`
-7. Derives the per-worktree development database name, creates it, writes it as `DB_DATABASE` in the worktree's `.env`, then migrates it (and seeds it, if it was just created)
+7. If `WORKTREE_DEV_DB_PER_WORKTREE=true`: derives the per-worktree development database name, creates it, writes it as `DB_DATABASE` in the worktree's `.env`, then migrates it (and seeds it, if it was just created)
 8. Runs `npm install` (via the configured runtime)
 
 ### Per-Worktree Test Databases
@@ -242,7 +242,7 @@ Setup then runs `WORKTREE_DEV_DB_MIGRATE_COMMAND` (default `php artisan migrate 
 WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --class=DemoSeeder --no-interaction
 ```
 
-Only MySQL/MariaDB connections are handled; setup skips the step for anything else. SQLite needs nothing extra when the database file lives inside the project, since each worktree has its own copy. To keep sharing one development database across worktrees, set `WORKTREE_DEV_DB_PER_WORKTREE=false`.
+Only MySQL/MariaDB connections are handled; setup skips the step for anything else. SQLite needs nothing extra when the database file lives inside the project, since each worktree has its own copy. `vendor/bin/worktree install` writes `WORKTREE_DEV_DB_PER_WORKTREE=true`; a `.worktree-isolation.env` without that line (including one written by an earlier version) keeps sharing one development database across worktrees, as does setting it to `false`.
 
 ### Running Tests
 
@@ -266,7 +266,7 @@ vendor/bin/worktree php artisan migrate
 
 It dispatches through the same runtime resolution as `vendor/bin/worktree test` and `vendor/bin/worktree setup`:
 
-- `native` — runs the command directly on the host.
+- `native` — runs the command directly on the host, from the worktree's root.
 - `docker-compose` — runs it via `docker compose -p <isolated-project> exec` in this worktree's own service container.
 - `docker-image` — runs it via a throwaway `docker run --rm -v <this-worktree>:...` against the built image, same as `vendor/bin/worktree test`.
 
@@ -334,8 +334,8 @@ WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
 # Additional env vars to forward to the test container (docker-image only)
 # WORKTREE_EXTRA_ENV_VARS=
 
-# --- Per-worktree development database ---
-# WORKTREE_DEV_DB_PER_WORKTREE=true
+# --- Per-worktree development database (off when unset) ---
+WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction
 # WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction
 ```
@@ -361,6 +361,12 @@ This creates `config/worktree-isolation.php` which mirrors the `.worktree-isolat
 | `vendor/bin/worktree test` | Run tests with per-worktree database isolation |
 | `vendor/bin/worktree clean` | Drop per-worktree test and development databases (no framework needed) |
 | `vendor/bin/worktree <anything else>` | Run that command inside the current worktree's runtime (`composer`, `npm`, `artisan`, ...) |
+
+## Upgrading from 1.x
+
+- The separate Composer bins are gone. Replace `vendor/bin/worktree-install`, `vendor/bin/worktree-setup`, `vendor/bin/test` and `vendor/bin/worktree-clean` with `vendor/bin/worktree install`, `setup`, `test` and `clean` in scripts, CI and aliases. The git hook needs no changes.
+- Per-worktree development databases stay off until you add `WORKTREE_DEV_DB_PER_WORKTREE=true` to `.worktree-isolation.env`.
+- A docker-compose config without `WORKTREE_COMPOSE_PROJECT_BASE` falls back to the main checkout's directory name, the same default the installer writes.
 
 ## AI Agent Integration
 

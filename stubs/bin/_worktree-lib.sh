@@ -39,12 +39,13 @@ validate_runtime() {
                 echo "Error: 'docker compose' not found. Install Docker with the Compose plugin." >&2
                 exit 1
             fi
-            if [[ -z "${WORKTREE_COMPOSE_PROJECT_BASE:-}" ]]; then
-                echo "Error: WORKTREE_COMPOSE_PROJECT_BASE must be set for the docker-compose runtime." >&2
-                echo "Re-run 'vendor/bin/worktree install --runtime=docker-compose --force' to regenerate .worktree-isolation.env." >&2
-                exit 1
+            local base="${WORKTREE_COMPOSE_PROJECT_BASE:-}"
+            if [[ -z "$base" ]]; then
+                # Configs written before install recorded this: fall back to
+                # what install derives, the main checkout's directory name.
+                base="$(slugify "$(basename "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")")")"
             fi
-            COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$WORKTREE_COMPOSE_PROJECT_BASE" "$WORKTREE_BASENAME")"
+            COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$base" "$WORKTREE_BASENAME")"
             COMPOSE_ARGS=(docker compose -p "$COMPOSE_PROJECT_NAME")
             if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
                 COMPOSE_ARGS+=(-f "$WORKTREE_COMPOSE_FILE")
@@ -68,16 +69,43 @@ validate_runtime() {
     esac
 }
 
-# Derives a Docker Compose project name from a base name and a worktree
-# directory name, using the same sanitization pattern as
-# TestDatabaseResolver::derive() (src/TestDatabaseResolver.php): lowercase,
-# collapse anything outside [a-z0-9] into a single hyphen, trim leading/
-# trailing hyphens.
+# Same sanitization as TestDatabaseResolver::worktreeSuffix() and
+# worktree-install's sanitizeComposeProjectBase(): lowercase, collapse
+# anything outside [a-z0-9] into a single hyphen, trim leading/trailing
+# hyphens.
+slugify() {
+    local slug
+    slug="$(echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
+    echo "${slug:-worktree}"
+}
+
 derive_compose_project_name() {
-    local base="$1" wt="$2"
-    local suffix
-    suffix="$(echo "$wt" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
-    echo "${base}-${suffix:-worktree}"
+    echo "$1-$(slugify "$2")"
+}
+
+# Derives and creates a per-worktree database. Runs from the project root
+# with RESOLVER_CLASS, WORKTREE_BASENAME and DB_* in its environment, and
+# prints "<name> created|existing" as its last line; the leading newline
+# keeps that line intact if PHP emitted a notice first.
+ENSURE_DB_PHP='
+    require "vendor/autoload.php";
+    $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
+    $name = $class::derive(getenv("DB_DATABASE") ?: "testing", getenv("WORKTREE_BASENAME") ?: "worktree");
+    $created = $class::ensureExists(
+        $name,
+        getenv("DB_HOST") ?: "127.0.0.1",
+        (int) (getenv("DB_PORT") ?: 3306),
+        getenv("DB_USERNAME") ?: "",
+        getenv("DB_PASSWORD") ?: "",
+    );
+    echo "\n", $name, $created === true ? " created" : " existing";
+'
+
+# Validates ENSURE_DB_PHP's output and prints its last line.
+parse_ensure_db_output() {
+    local last="${1##*$'\n'}"
+    [[ "$last" =~ ^[a-z0-9_-]+\ (created|existing)$ ]] || return 1
+    echo "$last"
 }
 
 build_docker_image_args() {
@@ -92,7 +120,8 @@ build_docker_image_args() {
     fi
 }
 
-forward_testing_env_vars() {
+# Appends "-e VAR=value" pairs for the testing environment to TEST_ENV.
+append_testing_env_args() {
     local DEFAULT_ENV_VARS=(
         APP_ENV APP_KEY APP_DEBUG
         DB_CONNECTION DB_HOST DB_PORT DB_DATABASE DB_USERNAME DB_PASSWORD DB_SSL_VERIFY_SERVER_CERT
@@ -107,7 +136,7 @@ forward_testing_env_vars() {
 
     for var in "${ENV_VARS[@]}"; do
         if [[ -n "${!var:-}" ]]; then
-            DOCKER_ARGS+=(-e "$var=${!var}")
+            TEST_ENV+=(-e "$var=${!var}")
         fi
     done
 }

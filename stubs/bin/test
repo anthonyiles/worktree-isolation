@@ -59,119 +59,40 @@ if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Inline PHP that derives and creates the per-worktree database.
+# 3. Run tests
 # ---------------------------------------------------------------------------
-# The autoload path placeholder is replaced per-driver.
-DB_ENSURE_PHP='
-    require "__AUTOLOAD__";
-    $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
-    $base  = getenv("DB_DATABASE") ?: "testing";
-    $wt    = getenv("WORKTREE_BASENAME") ?: "worktree";
-    $name  = $class::derive($base, $wt);
-    $class::ensureExists(
-        $name,
-        getenv("DB_HOST") ?: "127.0.0.1",
-        (int)(getenv("DB_PORT") ?: 3306),
-        getenv("DB_USERNAME") ?: "",
-        getenv("DB_PASSWORD") ?: "",
-    );
-    echo "Using test database: $name\n";
-    file_put_contents("/tmp/.test_db_name", $name);
+# Runs inside the target runtime. With ENSURE_DB_PHP set, it first derives and
+# creates this worktree's test database and points DB_DATABASE at it.
+RUN_TESTS='
+    set -o pipefail
+    if [[ -n "${ENSURE_DB_PHP:-}" ]]; then
+        result="$(php -r "$ENSURE_DB_PHP" | tail -n 1)" || exit
+        if [[ ! "$result" =~ ^[a-z0-9_-]+\ (created|existing)$ ]]; then
+            echo "Error: could not derive the per-worktree test database." >&2
+            exit 1
+        fi
+        export DB_DATABASE="${result%% *}"
+        echo "Using test database: $DB_DATABASE"
+    fi
+    exec $TEST_COMMAND "$@"
 '
 
-# ---------------------------------------------------------------------------
-# 4. Run tests
-# ---------------------------------------------------------------------------
+TEST_ENV=(-e "TEST_COMMAND=$TEST_COMMAND")
+
 if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ ]]; then
-    case "$RUNTIME" in
-        native)
-            RESOLVER_CLASS="$RESOLVER_CLASS" \
-            WORKTREE_BASENAME="$WORKTREE_BASENAME" \
-                php -r "${DB_ENSURE_PHP//__AUTOLOAD__/$PROJECT_ROOT/vendor/autoload.php}"
-
-            export DB_DATABASE
-            DB_DATABASE="$(cat /tmp/.test_db_name)"
-            $TEST_COMMAND "$@"
-            ;;
-
-        docker-compose)
-            "${COMPOSE_ARGS[@]}" exec -T \
-                -e "RESOLVER_CLASS=$RESOLVER_CLASS" \
-                -e "WORKTREE_BASENAME=$WORKTREE_BASENAME" \
-                -e "TEST_COMMAND=$TEST_COMMAND" \
-                -e "DB_DATABASE=${DB_DATABASE:-}" \
-                -e "DB_HOST=${DB_HOST:-}" \
-                -e "DB_PORT=${DB_PORT:-}" \
-                -e "DB_USERNAME=${DB_USERNAME:-}" \
-                -e "DB_PASSWORD=${DB_PASSWORD:-}" \
-                "$COMPOSE_SERVICE" \
-                bash -c '
-                    php -r '"'"'
-                        require "vendor/autoload.php";
-                        $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
-                        $base  = getenv("DB_DATABASE") ?: "testing";
-                        $wt    = getenv("WORKTREE_BASENAME") ?: "worktree";
-                        $name  = $class::derive($base, $wt);
-                        $class::ensureExists(
-                            $name,
-                            getenv("DB_HOST") ?: "127.0.0.1",
-                            (int)(getenv("DB_PORT") ?: 3306),
-                            getenv("DB_USERNAME") ?: "",
-                            getenv("DB_PASSWORD") ?: "",
-                        );
-                        echo "Using test database: $name\n";
-                        file_put_contents("/tmp/.test_db_name", $name);
-                    '"'"' && \
-                    export DB_DATABASE="$(cat /tmp/.test_db_name)" && \
-                    $TEST_COMMAND "$@"
-                ' -- "$@"
-            ;;
-
-        docker-image)
-            build_docker_image_args
-            forward_testing_env_vars
-            DOCKER_ARGS+=(-e "WORKTREE_BASENAME=$WORKTREE_BASENAME")
-            DOCKER_ARGS+=(-e "TEST_COMMAND=$TEST_COMMAND")
-
-            exec "${DOCKER_ARGS[@]}" --entrypoint bash "$IMAGE" -c '
-                php -r '"'"'
-                    require "vendor/autoload.php";
-                    $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
-                    $base  = getenv("DB_DATABASE") ?: "testing";
-                    $wt    = getenv("WORKTREE_BASENAME") ?: "worktree";
-                    $name  = $class::derive($base, $wt);
-                    $class::ensureExists(
-                        $name,
-                        getenv("DB_HOST") ?: "127.0.0.1",
-                        (int)(getenv("DB_PORT") ?: 3306),
-                        getenv("DB_USERNAME") ?: "",
-                        getenv("DB_PASSWORD") ?: "",
-                    );
-                    echo "Using test database: $name\n";
-                    file_put_contents("/tmp/.test_db_name", $name);
-                '"'"' && \
-                export DB_DATABASE="$(cat /tmp/.test_db_name)" && \
-                $TEST_COMMAND "$@"
-            ' -- "$@"
-            ;;
-    esac
-else
-    # No per-worktree DB — just run tests directly
-    case "$RUNTIME" in
-        native)
-            $TEST_COMMAND "$@"
-            ;;
-        docker-compose)
-            "${COMPOSE_ARGS[@]}" exec -T \
-                -e "TEST_COMMAND=$TEST_COMMAND" \
-                "$COMPOSE_SERVICE" \
-                bash -c '$TEST_COMMAND "$@"' -- "$@"
-            ;;
-        docker-image)
-            build_docker_image_args
-            forward_testing_env_vars
-            DOCKER_ARGS+=(-e "TEST_COMMAND=$TEST_COMMAND")
-            exec "${DOCKER_ARGS[@]}" --entrypoint bash "$IMAGE" -c '$TEST_COMMAND "$@"' -- "$@"
-            ;;
-    esac
+    TEST_ENV+=(
+        -e "ENSURE_DB_PHP=$ENSURE_DB_PHP"
+        -e "RESOLVER_CLASS=$RESOLVER_CLASS"
+        -e "WORKTREE_BASENAME=$WORKTREE_BASENAME"
+    )
+    for var in DB_DATABASE DB_HOST DB_PORT DB_USERNAME DB_PASSWORD; do
+        TEST_ENV+=(-e "$var=${!var:-}")
+    done
 fi
+
+# A docker-image container starts fresh, so it also needs the testing env.
+if [[ "$RUNTIME" == docker-image ]]; then
+    append_testing_env_args
+fi
+
+run_in_runtime "${TEST_ENV[@]}" bash -c "$RUN_TESTS" -- "$@"

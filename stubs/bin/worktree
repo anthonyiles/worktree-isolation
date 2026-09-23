@@ -39,12 +39,16 @@ resolve_script_dir() {
 }
 SCRIPT_DIR="$(resolve_script_dir)"
 
+usage() {
+    echo "Usage: vendor/bin/worktree <command> [args...]"
+    echo ""
+    echo "Known commands: install, setup, test, clean"
+    echo "Anything else runs inside this worktree's configured runtime"
+    echo "(e.g. composer install, npm run dev, php artisan migrate)."
+}
+
 if [[ $# -eq 0 ]]; then
-    echo "Usage: vendor/bin/worktree <command> [args...]" >&2
-    echo "" >&2
-    echo "Known commands: install, setup, test, clean" >&2
-    echo "Anything else runs inside this worktree's configured runtime" >&2
-    echo "(e.g. composer install, npm run dev, php artisan migrate)." >&2
+    usage >&2
     exit 1
 fi
 
@@ -52,6 +56,10 @@ COMMAND="$1"
 shift
 
 case "$COMMAND" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
     install)
         exec "$SCRIPT_DIR/worktree-install" "$@"
         ;;
@@ -81,6 +89,7 @@ IS_TTY=false
 
 case "$RUNTIME" in
     native)
+        cd "$PROJECT_ROOT"
         exec "$COMMAND" "$@"
         ;;
 

@@ -56,3 +56,12 @@ SCRIPT
     [ "$status" -ne 0 ]
     [[ "$output" == *"Usage: vendor/bin/worktree"* ]]
 }
+
+@test "prints usage and exits zero for --help and -h" {
+    for flag in --help -h; do
+        run "$DISPATCH_DIR/worktree" "$flag"
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"Usage: vendor/bin/worktree"* ]]
+    done
+    [ ! -s "$LOG" ]
+}

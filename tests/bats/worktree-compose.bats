@@ -58,13 +58,22 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
-@test "fails when WORKTREE_COMPOSE_PROJECT_BASE is unset instead of guessing a project name" {
+@test "falls back to the main checkout's directory name when WORKTREE_COMPOSE_PROJECT_BASE is unset" {
     sed -i.bak '/^WORKTREE_COMPOSE_PROJECT_BASE=/d' "$WORKTREE_DIR/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/worktree" php -v
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"WORKTREE_COMPOSE_PROJECT_BASE must be set"* ]]
+    [ "$status" -eq 0 ]
 
     run grep -- " exec " "$DOCKER_LOG"
-    [ "$status" -ne 0 ]
+    [[ "$output" == *"-p main-feature-auth"* ]]
+}
+
+@test "native passthrough runs from the worktree root" {
+    echo "WORKTREE_RUNTIME=native" > "$WORKTREE_DIR/.worktree-isolation.env"
+    mkdir -p "$WORKTREE_DIR/app/Models"
+    cd "$WORKTREE_DIR/app/Models"
+
+    run bash "$STUBS_DIR/worktree" pwd
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(cd "$WORKTREE_DIR" && pwd -P)" ]
 }

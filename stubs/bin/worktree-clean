@@ -137,10 +137,10 @@ function cleanupTargets(string $projectDir): array
         'label' => 'test',
         'file' => $testingFile,
         'env' => $testingEnv,
-        'pattern' => escapeLike($testingEnv['DB_DATABASE'] ?? 'testing') . '-%',
+        'pattern' => escapeLike(testDatabaseBase($testingEnv['DB_DATABASE'] ?? 'testing', $projectDir)) . '-%',
     ]];
 
-    $devEnabled = in_array($conf['WORKTREE_DEV_DB_PER_WORKTREE'] ?? 'true', ['true', '1'], true);
+    $devEnabled = in_array($conf['WORKTREE_DEV_DB_PER_WORKTREE'] ?? 'false', ['true', '1'], true);
     $devEnv = parseEnvFile("$projectDir/.env");
     $devBase = explode(DEV_DB_MARKER, $devEnv['DB_DATABASE'] ?? '', 2)[0];
     if ($devEnabled && $devBase !== '' && in_array($devEnv['DB_CONNECTION'] ?? '', ['mysql', 'mariadb'], true)) {
@@ -153,6 +153,23 @@ function cleanupTargets(string $projectDir): array
     }
 
     return $targets;
+}
+
+/**
+ * Setup writes a worktree's own derived name ("{base}-{worktree}") into its
+ * .env.testing, so strip that back to the base to match every worktree's.
+ */
+function testDatabaseBase(string $name, string $projectDir): string
+{
+    if (! is_file("$projectDir/.git")) {
+        return $name;
+    }
+
+    // Must match WorktreeIsolation\TestDatabaseResolver::worktreeSuffix().
+    $suffix = trim(preg_replace('/[^a-z0-9]+/', '-', strtolower(basename($projectDir))) ?? '', '-');
+    $suffix = '-' . ($suffix === '' ? 'worktree' : $suffix);
+
+    return str_ends_with($name, $suffix) ? substr($name, 0, -strlen($suffix)) : $name;
 }
 
 function escapeLike(string $value): string
