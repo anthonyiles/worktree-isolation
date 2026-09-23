@@ -13,27 +13,30 @@ class TestDatabaseResolver
     const int MAX_DERIVED_LENGTH = 40;
 
     /**
-     * Derive a per-worktree test database name from the base name and worktree directory.
+     * Derive a per-worktree test database name: "{base}_wt_{worktree}".
      *
      * @throws InvalidArgumentException
      */
     public static function derive(string $base, string $worktreeBasename): string
     {
-        $suffix = strtolower($worktreeBasename);
-        $suffix = preg_replace('/[^a-z0-9]+/', '-', $suffix) ?? '';
-        $suffix = trim($suffix, '-');
+        // The marker can't occur in an ordinary name, so a worktree's own
+        // derived name can be stripped back to the base, and the result can
+        // never be a database the main checkout uses.
+        $base = explode(DevDatabaseResolver::MARKER, $base, 2)[0];
 
-        if ($suffix === '') {
-            $suffix = 'worktree';
+        if ($base === '') {
+            throw new InvalidArgumentException('Cannot derive a per-worktree database name from an empty DB_DATABASE.');
         }
 
-        $derived = "$base-$suffix";
-
-        if (! str_contains(strtolower($derived), 'test')) {
+        // Checked on the base: a worktree named e.g. "test-refactor" must not
+        // make a non-test base pass.
+        if (! str_contains(strtolower($base), 'test')) {
             throw new InvalidArgumentException(
-                "Derived database name \"$derived\" does not contain \"test\". Refusing to proceed — this guard prevents accidental use of a non-test database."
+                "Database name \"$base\" does not contain \"test\". Refusing to proceed — this guard prevents accidental use of a non-test database."
             );
         }
+
+        $derived = $base.DevDatabaseResolver::MARKER.self::worktreeSuffix($worktreeBasename);
 
         if (strlen($derived) > self::MAX_DERIVED_LENGTH) {
             throw new InvalidArgumentException(
@@ -44,13 +47,23 @@ class TestDatabaseResolver
         return $derived;
     }
 
+    public static function worktreeSuffix(string $worktreeBasename): string
+    {
+        $suffix = preg_replace('/[^a-z0-9]+/', '-', strtolower($worktreeBasename)) ?? '';
+        $suffix = trim($suffix, '-');
+
+        return $suffix === '' ? 'worktree' : $suffix;
+    }
+
     /**
      * Ensure the given database exists, creating it if necessary.
+     *
+     * @return bool Whether the database was created by this call.
      *
      * @throws InvalidArgumentException
      * @throws PDOException
      */
-    public static function ensureExists(string $name, string $host, int $port, string $user, string $password): void
+    public static function ensureExists(string $name, string $host, int $port, string $user, string $password): bool
     {
         if (preg_match('/^[a-z0-9_-]+$/', $name) !== 1) {
             throw new InvalidArgumentException(
@@ -67,7 +80,7 @@ class TestDatabaseResolver
         $stmt->execute(['name' => $name]);
 
         if ($stmt->fetchColumn()) {
-            return;
+            return false;
         }
 
         try {
@@ -76,6 +89,10 @@ class TestDatabaseResolver
             if (($e->errorInfo[1] ?? null) !== 1007) {
                 throw $e;
             }
+
+            return false;
         }
+
+        return true;
     }
 }

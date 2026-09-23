@@ -11,31 +11,18 @@
 # WORKTREE_TEST_COMMAND in .worktree-isolation.env (e.g. `php vendor/bin/phpunit`).
 #
 # Usage:
-#   vendor/bin/test                        # run all tests
-#   vendor/bin/test --filter=testName      # forward args to test runner
-#   vendor/bin/test tests/Feature/MyTest.php
+#   vendor/bin/worktree test                        # run all tests
+#   vendor/bin/worktree test --filter=testName      # forward args to test runner
+#   vendor/bin/worktree test tests/Feature/MyTest.php
 #
+# Invoked as `vendor/bin/worktree test` (stubs/bin/worktree dispatches
+# straight into this file); not itself exposed as a Composer bin.
 set -euo pipefail
 
-# vendor/bin/test is a Composer-managed symlink, not the project root —
-# resolve via git instead.
-PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
-
-# ---------------------------------------------------------------------------
-# 0. Load configuration
-# ---------------------------------------------------------------------------
-CONF_FILE="$PROJECT_ROOT/.worktree-isolation.env"
-if [[ -f "$CONF_FILE" ]]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$CONF_FILE"
-    set +a
-fi
-
-# vendor/bin/test is a Composer-managed symlink, so ${BASH_SOURCE[0]} points
-# at the symlink, not the real file next to _worktree-lib.sh. readlink -f
-# isn't portable (no -f on macOS's stock readlink), so resolve it manually.
+# This file can still be invoked through a symlink (bats tests do this), so
+# keep resolving one defensively even though vendor/bin/worktree calls it by
+# a direct, non-symlinked path. readlink -f isn't portable (no -f on macOS's
+# stock readlink), so resolve it manually.
 resolve_script_dir() {
     local src="${BASH_SOURCE[0]}"
     while [[ -h "$src" ]]; do
@@ -50,57 +37,17 @@ SCRIPT_DIR="$(resolve_script_dir)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/_worktree-lib.sh"
 
-RUNTIME="${WORKTREE_RUNTIME:-native}"
+# ---------------------------------------------------------------------------
+# 0. Load configuration
+# ---------------------------------------------------------------------------
+load_worktree_config
+require_worktree
 TEST_COMMAND="${WORKTREE_TEST_COMMAND:-php artisan test}"
-TESTING_ENV_FILE="${WORKTREE_TESTING_ENV_FILE:-.env.testing}"
-DB_PER_WORKTREE_KEY="${WORKTREE_DB_PER_WORKTREE_KEY:-TEST_DB_PER_WORKTREE}"
-RESOLVER_CLASS="${WORKTREE_RESOLVER_CLASS:-WorktreeIsolation\\TestDatabaseResolver}"
-
-# docker-image driver settings
-IMAGE="${WORKTREE_DOCKER_IMAGE:-}"
-NETWORK="${WORKTREE_DOCKER_NETWORK:-}"
-WORKDIR="${WORKTREE_DOCKER_WORKDIR:-/var/www/html}"
-
-# docker-compose driver settings
-COMPOSE_SERVICE="${WORKTREE_COMPOSE_SERVICE:-app}"
-COMPOSE_FILE_OPT=""
-if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
-    COMPOSE_FILE_OPT="-f $WORKTREE_COMPOSE_FILE"
-fi
-# The env var is normally set by worktree-install; the fallback here is just
-# a safety net for a .worktree-isolation.env written before this feature
-# existed. Unlike worktree-setup, there's no MAIN_REPO to fall back to here.
-COMPOSE_PROJECT_BASE="${WORKTREE_COMPOSE_PROJECT_BASE:-$(basename "$PROJECT_ROOT")}"
-COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$COMPOSE_PROJECT_BASE" "$WORKTREE_BASENAME")"
 
 # ---------------------------------------------------------------------------
 # 1. Validate runtime
 # ---------------------------------------------------------------------------
-case "$RUNTIME" in
-    native)
-        ;;
-    docker-compose)
-        if ! docker compose version > /dev/null 2>&1; then
-            echo "Error: 'docker compose' not found. Install Docker with the Compose plugin." >&2
-            exit 1
-        fi
-        ;;
-    docker-image)
-        if [[ -z "$IMAGE" ]]; then
-            echo "Error: WORKTREE_DOCKER_IMAGE must be set for the docker-image runtime." >&2
-            exit 1
-        fi
-        if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
-            echo "Error: Docker image '$IMAGE' not found." >&2
-            echo "Build it first (e.g. 'docker compose build' or 'vendor/bin/sail build')." >&2
-            exit 1
-        fi
-        ;;
-    *)
-        echo "Error: Unknown WORKTREE_RUNTIME '$RUNTIME'. Use: native, docker-compose, or docker-image." >&2
-        exit 1
-        ;;
-esac
+validate_runtime
 
 # ---------------------------------------------------------------------------
 # 2. Load testing env vars
@@ -113,150 +60,52 @@ if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Helper: build docker-image base args
+# 3. Run tests
 # ---------------------------------------------------------------------------
-build_docker_image_args() {
-    DOCKER_ARGS=(
-        docker run --rm
-        -v "$PROJECT_ROOT:$WORKDIR"
-        -w "$WORKDIR"
-    )
-
-    if [[ -n "$NETWORK" ]]; then
-        DOCKER_ARGS+=(--network "$NETWORK")
-    fi
-
-    local DEFAULT_ENV_VARS=(
-        APP_ENV APP_KEY APP_DEBUG
-        DB_CONNECTION DB_HOST DB_PORT DB_DATABASE DB_USERNAME DB_PASSWORD DB_SSL_VERIFY_SERVER_CERT
-        BCRYPT_ROUNDS CACHE_DRIVER MAIL_MAILER QUEUE_CONNECTION SESSION_DRIVER
-        TELESCOPE_ENABLED
-        "$DB_PER_WORKTREE_KEY"
-    )
-
-    local EXTRA_VARS
-    IFS=' ' read -ra EXTRA_VARS <<< "${WORKTREE_EXTRA_ENV_VARS:-}"
-    local ENV_VARS=("${DEFAULT_ENV_VARS[@]}" "${EXTRA_VARS[@]}")
-
-    for var in "${ENV_VARS[@]}"; do
-        if [[ -n "${!var:-}" ]]; then
-            DOCKER_ARGS+=(-e "$var=${!var}")
+# Runs inside the target runtime. With ENSURE_DB_PHP set, it first derives and
+# creates this worktree's test database and points DB_DATABASE at it.
+RUN_TESTS='
+    set -o pipefail
+    if [[ -n "${ENSURE_DB_PHP:-}" ]]; then
+        result="$(php -r "$ENSURE_DB_PHP" | tail -n 1)" || exit
+        if [[ ! "$result" =~ ^[a-z0-9_-]+\ (created|existing)$ ]]; then
+            echo "Error: could not derive the per-worktree test database." >&2
+            exit 1
         fi
-    done
-}
-
-# Inline PHP that derives and creates the per-worktree database.
-# The autoload path placeholder is replaced per-driver.
-DB_ENSURE_PHP='
-    require "__AUTOLOAD__";
-    $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
-    $base  = getenv("DB_DATABASE") ?: "testing";
-    $wt    = getenv("WORKTREE_BASENAME") ?: "worktree";
-    $name  = $class::derive($base, $wt);
-    $class::ensureExists(
-        $name,
-        getenv("DB_HOST") ?: "127.0.0.1",
-        (int)(getenv("DB_PORT") ?: 3306),
-        getenv("DB_USERNAME") ?: "",
-        getenv("DB_PASSWORD") ?: "",
-    );
-    echo "Using test database: $name\n";
-    file_put_contents("/tmp/.test_db_name", $name);
+        export DB_DATABASE="${result%% *}"
+        echo "Using test database: $DB_DATABASE"
+    fi
+    exec $TEST_COMMAND "$@"
 '
 
-# ---------------------------------------------------------------------------
-# 4. Run tests
-# ---------------------------------------------------------------------------
-if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ ]]; then
-    case "$RUNTIME" in
-        native)
-            RESOLVER_CLASS="$RESOLVER_CLASS" \
-            WORKTREE_BASENAME="$WORKTREE_BASENAME" \
-                php -r "${DB_ENSURE_PHP//__AUTOLOAD__/$PROJECT_ROOT/vendor/autoload.php}"
+TEST_ENV=(-e "TEST_COMMAND=$TEST_COMMAND")
+MAIN_TEST_DB="$(main_test_database)"
 
-            export DB_DATABASE
-            DB_DATABASE="$(cat /tmp/.test_db_name)"
-            $TEST_COMMAND "$@"
-            ;;
-
-        docker-compose)
-            # shellcheck disable=SC2086
-            docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILE_OPT exec -T \
-                -e "RESOLVER_CLASS=$RESOLVER_CLASS" \
-                -e "WORKTREE_BASENAME=$WORKTREE_BASENAME" \
-                -e "TEST_COMMAND=$TEST_COMMAND" \
-                -e "DB_DATABASE=${DB_DATABASE:-}" \
-                -e "DB_HOST=${DB_HOST:-}" \
-                -e "DB_PORT=${DB_PORT:-}" \
-                -e "DB_USERNAME=${DB_USERNAME:-}" \
-                -e "DB_PASSWORD=${DB_PASSWORD:-}" \
-                "$COMPOSE_SERVICE" \
-                bash -c '
-                    php -r '"'"'
-                        require "vendor/autoload.php";
-                        $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
-                        $base  = getenv("DB_DATABASE") ?: "testing";
-                        $wt    = getenv("WORKTREE_BASENAME") ?: "worktree";
-                        $name  = $class::derive($base, $wt);
-                        $class::ensureExists(
-                            $name,
-                            getenv("DB_HOST") ?: "127.0.0.1",
-                            (int)(getenv("DB_PORT") ?: 3306),
-                            getenv("DB_USERNAME") ?: "",
-                            getenv("DB_PASSWORD") ?: "",
-                        );
-                        echo "Using test database: $name\n";
-                        file_put_contents("/tmp/.test_db_name", $name);
-                    '"'"' && \
-                    export DB_DATABASE="$(cat /tmp/.test_db_name)" && \
-                    $TEST_COMMAND "$@"
-                ' -- "$@"
-            ;;
-
-        docker-image)
-            build_docker_image_args
-            DOCKER_ARGS+=(-e "WORKTREE_BASENAME=$WORKTREE_BASENAME")
-            DOCKER_ARGS+=(-e "TEST_COMMAND=$TEST_COMMAND")
-
-            exec "${DOCKER_ARGS[@]}" --entrypoint bash "$IMAGE" -c '
-                php -r '"'"'
-                    require "vendor/autoload.php";
-                    $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
-                    $base  = getenv("DB_DATABASE") ?: "testing";
-                    $wt    = getenv("WORKTREE_BASENAME") ?: "worktree";
-                    $name  = $class::derive($base, $wt);
-                    $class::ensureExists(
-                        $name,
-                        getenv("DB_HOST") ?: "127.0.0.1",
-                        (int)(getenv("DB_PORT") ?: 3306),
-                        getenv("DB_USERNAME") ?: "",
-                        getenv("DB_PASSWORD") ?: "",
-                    );
-                    echo "Using test database: $name\n";
-                    file_put_contents("/tmp/.test_db_name", $name);
-                '"'"' && \
-                export DB_DATABASE="$(cat /tmp/.test_db_name)" && \
-                $TEST_COMMAND "$@"
-            ' -- "$@"
-            ;;
-    esac
-else
-    # No per-worktree DB — just run tests directly
-    case "$RUNTIME" in
-        native)
-            $TEST_COMMAND "$@"
-            ;;
-        docker-compose)
-            # shellcheck disable=SC2086
-            docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILE_OPT exec -T \
-                -e "TEST_COMMAND=$TEST_COMMAND" \
-                "$COMPOSE_SERVICE" \
-                bash -c '$TEST_COMMAND "$@"' -- "$@"
-            ;;
-        docker-image)
-            build_docker_image_args
-            DOCKER_ARGS+=(-e "TEST_COMMAND=$TEST_COMMAND")
-            exec "${DOCKER_ARGS[@]}" --entrypoint bash "$IMAGE" -c '$TEST_COMMAND "$@"' -- "$@"
-            ;;
-    esac
+if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ && "${DB_CONNECTION:-}" =~ ^(mysql|mariadb)$ ]]; then
+    # Derive from the main checkout's name, as setup does.
+    base_db="${MAIN_TEST_DB:-${DB_DATABASE:-}}"
+    if ! DB_DATABASE="$(derive_test_database_name "${base_db:-testing}" "$WORKTREE_BASENAME")"; then
+        echo "Error: could not derive the per-worktree test database from '${base_db:-testing}'." >&2
+        echo "It must contain \"test\" and fit in 40 characters with the worktree name." >&2
+        exit 1
+    fi
+    TEST_ENV+=(
+        -e "ENSURE_DB_PHP=$ENSURE_DB_PHP"
+        -e "WORKTREE_BASENAME=$WORKTREE_BASENAME"
+        -e "MAIN_DB_DATABASE=$MAIN_TEST_DB"
+    )
+    for var in DB_DATABASE DB_HOST DB_PORT DB_USERNAME DB_PASSWORD; do
+        TEST_ENV+=(-e "$var=${!var:-}")
+    done
+elif [[ -n "$MAIN_TEST_DB" && "${DB_DATABASE:-}" == "$MAIN_TEST_DB" ]]; then
+    echo "Error: $TESTING_ENV_FILE points at the main checkout's test database ($MAIN_TEST_DB)." >&2
+    echo "Set ${DB_PER_WORKTREE_KEY}=true in $TESTING_ENV_FILE, or run vendor/bin/worktree setup." >&2
+    exit 1
 fi
+
+# A docker-image container starts fresh, so it also needs the testing env.
+if [[ "$RUNTIME" == docker-image ]]; then
+    append_testing_env_args
+fi
+
+run_in_runtime "${TEST_ENV[@]}" bash -c "$RUN_TESTS" -- "$@"

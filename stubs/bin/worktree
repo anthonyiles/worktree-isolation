@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+#
+# Unified entrypoint for worktree isolation, Sail-style: every operation goes
+# through this one command instead of remembering four separate script names.
+#
+# Known subcommands delegate to their dedicated script:
+#   vendor/bin/worktree install [args...]   -> worktree-install
+#   vendor/bin/worktree setup               -> worktree-setup
+#   vendor/bin/worktree test [args...]      -> test
+#   vendor/bin/worktree clean [args...]     -> worktree-clean
+#
+# Anything else is passed straight through into this worktree's configured
+# runtime (native host, docker-compose service, or docker-image container) —
+# e.g. `composer require foo/bar`, `npm run dev`, `php artisan migrate`.
+#
+# Alias this for a Sail-like feel:
+#   alias worktree='vendor/bin/worktree'
+#   worktree test
+#   worktree composer install
+#   worktree npm run dev
+#
+set -euo pipefail
+
+# vendor/bin/worktree is a Composer-managed symlink, so ${BASH_SOURCE[0]}
+# points at the symlink, not the real file next to the sibling scripts.
+# readlink -f isn't portable (no -f on macOS's stock readlink), so resolve it
+# manually. (Duplicated in worktree-setup/test rather than shared via
+# _worktree-lib.sh: resolving *this* script's own symlink has to happen
+# before we know where the lib even is.)
+resolve_script_dir() {
+    local src="${BASH_SOURCE[0]}"
+    while [[ -h "$src" ]]; do
+        local dir
+        dir="$(cd -P "$(dirname "$src")" && pwd)"
+        src="$(readlink "$src")"
+        [[ "$src" != /* ]] && src="$dir/$src"
+    done
+    cd -P "$(dirname "$src")" && pwd
+}
+SCRIPT_DIR="$(resolve_script_dir)"
+
+usage() {
+    echo "Usage: vendor/bin/worktree <command> [args...]"
+    echo ""
+    echo "Known commands: install, setup, test, clean"
+    echo "Anything else runs inside this worktree's configured runtime"
+    echo "(e.g. composer install, npm run dev, php artisan migrate)."
+}
+
+if [[ $# -eq 0 ]]; then
+    usage >&2
+    exit 1
+fi
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    install)
+        exec php "$SCRIPT_DIR/worktree-install" "$@"
+        ;;
+    setup)
+        exec bash "$SCRIPT_DIR/worktree-setup" "$@"
+        ;;
+    test)
+        exec bash "$SCRIPT_DIR/test" "$@"
+        ;;
+    clean)
+        exec php "$SCRIPT_DIR/worktree-clean" "$@"
+        ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Passthrough: run "$COMMAND $@" inside this worktree's runtime target.
+# ---------------------------------------------------------------------------
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/_worktree-lib.sh"
+load_worktree_config
+require_worktree
+validate_runtime
+
+# .env.testing is deliberately not loaded: passthrough runs against the app's
+# own environment, not the test database.
+IS_TTY=false
+[[ -t 0 && -t 1 ]] && IS_TTY=true
+
+case "$RUNTIME" in
+    native)
+        cd "$PROJECT_ROOT"
+        exec "$COMMAND" "$@"
+        ;;
+
+    docker-compose)
+        EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec)
+        [[ "$IS_TTY" == true ]] || EXEC_ARGS+=(-T)
+        exec "${EXEC_ARGS[@]}" "$COMPOSE_SERVICE" "$COMMAND" "$@"
+        ;;
+
+    docker-image)
+        build_docker_image_args
+        DOCKER_ARGS+=(-i)
+        [[ "$IS_TTY" == true ]] && DOCKER_ARGS+=(-t)
+
+        # Overriding --entrypoint with the passthrough command's first token
+        # is the same pattern worktree-setup uses per-command (--entrypoint
+        # composer / --entrypoint npm), generalized to any command.
+        exec "${DOCKER_ARGS[@]}" --entrypoint "$COMMAND" "$IMAGE" "$@"
+        ;;
+esac

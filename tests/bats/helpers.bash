@@ -35,9 +35,11 @@ SCRIPT
 WORKTREE_RUNTIME=docker-compose
 WORKTREE_COMPOSE_SERVICE=app
 WORKTREE_COMPOSE_PROJECT_BASE=myapp
+WORKTREE_DB_WAIT_SECONDS=0
 ENV
 
     cat > "$WORKTREE_DIR/.env.testing" <<ENV
+DB_CONNECTION=mysql
 DB_DATABASE=testing
 DB_HOST=127.0.0.1
 DB_PORT=3306
@@ -46,4 +48,17 @@ DB_PASSWORD=
 ENV
 
     cd "$WORKTREE_DIR" || return 1
+}
+
+# Also logs argv as "[arg] [arg]" so tests can detect word-splitting.
+log_docker_argv() {
+    DOCKER_ARGV_LOG="$BATS_TEST_TMPDIR/docker-argv.log"
+    : > "$DOCKER_ARGV_LOG"
+    cat > "$FAKE_BIN/docker" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$*" >> "$DOCKER_LOG"
+printf '[%s] ' "\$@" >> "$DOCKER_ARGV_LOG"
+echo >> "$DOCKER_ARGV_LOG"
+exit 0
+SCRIPT
 }

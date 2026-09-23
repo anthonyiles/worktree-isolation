@@ -63,3 +63,11 @@ run_install() {
     run grep -c '^WORKTREE_COMPOSE_PROJECT_BASE=' "$PROJECT_DIR/.worktree-isolation.env"
     [ "$output" -eq 0 ]
 }
+
+@test "registers the post-checkout hook to run through bash" {
+    run run_install --runtime=native
+    [ "$status" -eq 0 ]
+
+    run git -C "$PROJECT_DIR" config --local hook.worktree-setup.command
+    [ "$output" = "bash '$STUBS_DIR/githooks/post-checkout-worktree-setup.sh'" ]
+}

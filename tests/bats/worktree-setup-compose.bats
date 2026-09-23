@@ -47,3 +47,38 @@ setup() {
     run grep -- "up -d" "$DOCKER_LOG"
     [[ "$output" == *"-p myapp-feature-auth"* ]]
 }
+
+@test "keeps a compose file path with spaces as a single argument" {
+    log_docker_argv
+    echo "WORKTREE_COMPOSE_FILE=\"my compose.yml\"" >> "$WORKTREE_DIR/.worktree-isolation.env"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+
+    # up -d, composer install, DB derivation, npm install
+    run grep -cF -- "[-f] [my compose.yml]" "$DOCKER_ARGV_LOG"
+    [ "$output" -eq 4 ]
+}
+
+@test "copies env files into a worktree that uses relative gitdir paths, run from a subdirectory" {
+    echo "APP_NAME=main" > "$MAIN_REPO/.env"
+    relative_dir="$BATS_TEST_TMPDIR/worktrees/relative"
+    git -C "$MAIN_REPO" worktree add -q --relative-paths -b relative "$relative_dir"
+    cp "$WORKTREE_DIR/.worktree-isolation.env" "$WORKTREE_DIR/.env.testing" "$relative_dir/"
+    mkdir -p "$relative_dir/app"
+    cd "$relative_dir/app"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$relative_dir/.env")" = "APP_NAME=main" ]
+}
+
+@test "does nothing in the main checkout" {
+    cd "$MAIN_REPO"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Nothing to set up"* ]]
+    run grep -- "up -d" "$DOCKER_LOG"
+    [ "$status" -ne 0 ]
+}

@@ -29,3 +29,14 @@ setup() {
     run grep -- " exec " "$DOCKER_LOG"
     [[ "$output" == *"-p myapp-feature-auth"* ]]
 }
+
+@test "keeps a compose file path with spaces as a single argument" {
+    log_docker_argv
+    echo "WORKTREE_COMPOSE_FILE=\"my compose.yml\"" >> "$WORKTREE_DIR/.worktree-isolation.env"
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 0 ]
+
+    run grep -F -- "[-f] [my compose.yml]" "$DOCKER_ARGV_LOG"
+    [ "$status" -eq 0 ]
+}

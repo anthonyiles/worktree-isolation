@@ -4,16 +4,18 @@
 declare(strict_types=1);
 
 /**
- * Standalone installer for worktree isolation.
+ * Installer for worktree isolation. Invoked as `vendor/bin/worktree install`
+ * (stubs/bin/worktree dispatches straight into this file); not itself
+ * exposed as a Composer bin.
  *
  * No framework dependencies — uses only PHP builtins.
  * Laravel projects can also use `php artisan worktree:install` which delegates here.
  *
  * Usage:
- *   vendor/bin/worktree-install
- *   vendor/bin/worktree-install --runtime=docker-compose --compose-service=app
- *   vendor/bin/worktree-install --runtime=docker-image --docker-image=myapp --docker-network=mynet
- *   vendor/bin/worktree-install --force
+ *   vendor/bin/worktree install
+ *   vendor/bin/worktree install --runtime=docker-compose --compose-service=app
+ *   vendor/bin/worktree install --runtime=docker-image --docker-image=myapp --docker-network=mynet
+ *   vendor/bin/worktree install --force
  */
 
 $validRuntimes = ['native', 'docker-compose', 'docker-image'];
@@ -33,7 +35,7 @@ $opts = getopt('', [
 
 if (isset($opts['help'])) {
     fwrite(STDOUT, <<<HELP
-    Usage: vendor/bin/worktree-install [OPTIONS]
+    Usage: vendor/bin/worktree install [OPTIONS]
 
     Options:
       --runtime=DRIVER              Runtime driver: native (default), docker-compose, docker-image
@@ -77,8 +79,8 @@ if (! verifyGitVersion()) {
 }
 
 // 2. Create .worktree-isolation.env — the only file this installer writes
-// into the project. worktree-setup/test/worktree-clean/worktree-install run
-// straight from vendor/bin/ (Composer's "bin" declaration).
+// into the project. Everything else runs from vendor/ via vendor/bin/worktree
+// (the only Composer "bin"), which dispatches to the sibling scripts.
 createEnvConfig($projectDir, $runtime, $opts, $force);
 
 // 3. Configure git hooks
@@ -92,7 +94,7 @@ echo "    pointing at the vendor copy of the post-checkout hook\n\n";
 echo "Next steps:\n";
 echo "  1. Review .worktree-isolation.env and adjust if needed\n";
 echo "  2. Commit .worktree-isolation.env\n";
-echo "  3. Other engineers just need to run: vendor/bin/worktree-install (or php artisan worktree:install for Laravel)\n";
+echo "  3. Other engineers just need to run: vendor/bin/worktree install (or php artisan worktree:install for Laravel)\n";
 echo "     once per clone — this activates the hook locally and works for worktrees on any branch,\n";
 echo "     including branches that predate this package being added.\n\n";
 
@@ -104,8 +106,8 @@ exit(0);
 
 function resolveProjectRoot(): string
 {
-    // vendor/bin/worktree-install is a Composer-managed symlink, not the
-    // project root — resolve via git instead.
+    // This script runs from inside vendor/, not the project root —
+    // resolve via git instead.
     $toplevel = trim((string) shell_exec('git rev-parse --show-toplevel 2>/dev/null'));
 
     return $toplevel !== '' ? $toplevel : getcwd();
@@ -177,7 +179,7 @@ function createEnvConfig(string $projectDir, string $runtime, array $opts, bool 
 
     $lines = [
         '# Worktree Isolation Configuration',
-        '# These values are used by vendor/bin/worktree-setup and vendor/bin/test',
+        '# These values are used by vendor/bin/worktree setup and vendor/bin/worktree test',
         '',
         '# Runtime driver: native | docker-compose | docker-image',
         "WORKTREE_RUNTIME=$runtime",
@@ -230,6 +232,11 @@ function createEnvConfig(string $projectDir, string $runtime, array $opts, bool 
     $lines[] = '# Additional env vars to pass to the test container (space-separated, docker-image only)';
     $lines[] = '# WORKTREE_EXTRA_ENV_VARS=';
     $lines[] = '';
+    $lines[] = '# Per-worktree development database (MySQL/MariaDB)';
+    $lines[] = 'WORKTREE_DEV_DB_PER_WORKTREE=true';
+    $lines[] = '# WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction';
+    $lines[] = '# WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction';
+    $lines[] = '';
 
     file_put_contents($envFile, implode("\n", $lines));
     echo "  Created: .worktree-isolation.env\n";
@@ -240,11 +247,13 @@ function configureGitHooks(string $projectDir, string $stubsDir): void
     // hook.*.command must be an absolute path: git resolves a relative one
     // against the cwd of whatever worktree is running the hook (the new
     // worktree, for post-checkout), not the main repo.
-    $hookScript = "$stubsDir/githooks/post-checkout-worktree-setup.sh";
+    // Run through bash so it works even when Composer didn't keep the
+    // executable bit (zip dists without unzip).
+    $hookCommand = 'bash ' . escapeshellarg("$stubsDir/githooks/post-checkout-worktree-setup.sh");
 
     exec(
         'cd ' . escapeshellarg($projectDir)
-            . ' && git config --local hook.worktree-setup.command ' . escapeshellarg($hookScript)
+            . ' && git config --local hook.worktree-setup.command ' . escapeshellarg($hookCommand)
             . ' && git config --local --replace-all hook.worktree-setup.event post-checkout 2>&1',
         $output,
         $exitCode
@@ -255,7 +264,7 @@ function configureGitHooks(string $projectDir, string $stubsDir): void
     } else {
         echo "  Warning: Could not configure git hooks automatically.\n";
         echo "  Run manually:\n";
-        echo '    git config --local hook.worktree-setup.command ' . escapeshellarg($hookScript) . "\n";
+        echo '    git config --local hook.worktree-setup.command ' . escapeshellarg($hookCommand) . "\n";
         echo "    git config --local --replace-all hook.worktree-setup.event post-checkout\n";
     }
 }
