@@ -80,6 +80,7 @@ esac
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/_worktree-lib.sh"
 load_worktree_config
+require_worktree
 validate_runtime
 
 # .env.testing is deliberately not loaded: passthrough runs against the app's

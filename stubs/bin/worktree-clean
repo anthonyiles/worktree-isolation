@@ -20,7 +20,7 @@ declare(strict_types=1);
 
 // Must match WorktreeIsolation\DevDatabaseResolver::MARKER; this script
 // runs without the package autoloader.
-const DEV_DB_MARKER = '_wt_';
+const WORKTREE_DB_MARKER = '_wt_';
 
 $opts = getopt('', ['force', 'project-dir:', 'help']);
 
@@ -28,8 +28,10 @@ if (isset($opts['help'])) {
     fwrite(STDOUT, <<<HELP
     Usage: vendor/bin/worktree clean [OPTIONS]
 
-    Drops all per-worktree test databases ("{base}-*", from .env.testing) and
-    development databases ("{base}_wt_*", from .env).
+    Drops all per-worktree test databases ("{base}_wt_*", plus the older
+    "{base}-*" naming, from .env.testing) and development databases
+    ("{base}_wt_*", from .env). The main checkout's own databases are never
+    dropped.
 
     Options:
       --force            Drop databases without confirmation
@@ -43,7 +45,9 @@ if (isset($opts['help'])) {
 $force = isset($opts['force']);
 $projectDir = $opts['project-dir'] ?? resolveProjectRoot();
 
-$targets = cleanupTargets($projectDir);
+$mainDir = mainCheckoutDir($projectDir);
+$targets = cleanupTargets($projectDir, $mainDir);
+$protected = protectedDatabases($mainDir);
 
 $found = [];
 foreach ($targets as $target) {
@@ -62,12 +66,16 @@ foreach ($targets as $target) {
         exit(1);
     }
 
+    $databases = [];
     $stmt = $pdo->prepare('SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?');
-    $stmt->execute([$target['pattern']]);
-    $databases = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    foreach ($target['patterns'] as $pattern) {
+        $stmt->execute([$pattern]);
+        $databases = [...$databases, ...$stmt->fetchAll(PDO::FETCH_COLUMN)];
+    }
+    $databases = array_values(array_diff(array_unique($databases), $protected, array_column($found, 1)));
 
     if (empty($databases)) {
-        echo "No per-worktree {$target['label']} databases found (pattern: {$target['pattern']}).\n";
+        echo "No per-worktree {$target['label']} databases found (pattern: " . implode(', ', $target['patterns']) . ").\n";
         continue;
     }
 
@@ -124,31 +132,48 @@ function resolveProjectRoot(): string
     return $toplevel !== '' ? $toplevel : getcwd();
 }
 
+function mainCheckoutDir(string $projectDir): string
+{
+    $commonDir = trim((string) shell_exec(
+        'git -C ' . escapeshellarg($projectDir) . ' rev-parse --path-format=absolute --git-common-dir 2>/dev/null'
+    ));
+
+    return $commonDir !== '' ? dirname($commonDir) : $projectDir;
+}
+
 /**
- * @return list<array{label: string, file: string, env: array<string, string>, pattern: string}>
+ * Bases come from the main checkout's env files, which hold the plain names
+ * every worktree's are derived from.
+ *
+ * @return list<array{label: string, file: string, env: array<string, string>, patterns: list<string>}>
  */
-function cleanupTargets(string $projectDir): array
+function cleanupTargets(string $projectDir, string $mainDir): array
 {
     $conf = parseEnvFile("$projectDir/.worktree-isolation.env");
 
     $testingFile = $conf['WORKTREE_TESTING_ENV_FILE'] ?? '.env.testing';
-    $testingEnv = parseEnvFile("$projectDir/$testingFile");
+    $testingEnv = parseEnvFile("$mainDir/$testingFile") ?: parseEnvFile("$projectDir/$testingFile");
+    $testBase = explode(WORKTREE_DB_MARKER, $testingEnv['DB_DATABASE'] ?? '', 2)[0] ?: 'testing';
     $targets = [[
         'label' => 'test',
         'file' => $testingFile,
         'env' => $testingEnv,
-        'pattern' => escapeLike(testDatabaseBase($testingEnv['DB_DATABASE'] ?? 'testing', $projectDir)) . '-%',
+        'patterns' => [
+            escapeLike($testBase . WORKTREE_DB_MARKER) . '%',
+            // Names from before test databases used the marker.
+            escapeLike($testBase) . '-%',
+        ],
     ]];
 
     $devEnabled = in_array($conf['WORKTREE_DEV_DB_PER_WORKTREE'] ?? 'false', ['true', '1'], true);
-    $devEnv = parseEnvFile("$projectDir/.env");
-    $devBase = explode(DEV_DB_MARKER, $devEnv['DB_DATABASE'] ?? '', 2)[0];
+    $devEnv = parseEnvFile("$mainDir/.env") ?: parseEnvFile("$projectDir/.env");
+    $devBase = explode(WORKTREE_DB_MARKER, $devEnv['DB_DATABASE'] ?? '', 2)[0];
     if ($devEnabled && $devBase !== '' && in_array($devEnv['DB_CONNECTION'] ?? '', ['mysql', 'mariadb'], true)) {
         $targets[] = [
             'label' => 'development',
             'file' => '.env',
             'env' => $devEnv,
-            'pattern' => escapeLike($devBase . DEV_DB_MARKER) . '%',
+            'patterns' => [escapeLike($devBase . WORKTREE_DB_MARKER) . '%'],
         ];
     }
 
@@ -156,20 +181,17 @@ function cleanupTargets(string $projectDir): array
 }
 
 /**
- * Setup writes a worktree's own derived name ("{base}-{worktree}") into its
- * .env.testing, so strip that back to the base to match every worktree's.
+ * @return list<string>
  */
-function testDatabaseBase(string $name, string $projectDir): string
+function protectedDatabases(string $mainDir): array
 {
-    if (! is_file("$projectDir/.git")) {
-        return $name;
-    }
+    $conf = parseEnvFile("$mainDir/.worktree-isolation.env");
+    $files = ['.env', $conf['WORKTREE_TESTING_ENV_FILE'] ?? '.env.testing', $conf['WORKTREE_TESTING_ENV_EXAMPLE'] ?? '.env.testing.example'];
 
-    // Must match WorktreeIsolation\TestDatabaseResolver::worktreeSuffix().
-    $suffix = trim(preg_replace('/[^a-z0-9]+/', '-', strtolower(basename($projectDir))) ?? '', '-');
-    $suffix = '-' . ($suffix === '' ? 'worktree' : $suffix);
-
-    return str_ends_with($name, $suffix) ? substr($name, 0, -strlen($suffix)) : $name;
+    return array_values(array_filter(array_map(
+        fn (string $file) => parseEnvFile("$mainDir/$file")['DB_DATABASE'] ?? '',
+        $files
+    )));
 }
 
 function escapeLike(string $value): string

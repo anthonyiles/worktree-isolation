@@ -16,7 +16,7 @@ ENV
     cat > "$FAKE_BIN/php" <<'SCRIPT'
 #!/usr/bin/env bash
 echo "Deprecated: something in vendor/foo.php"
-printf '\n%s existing' "$DB_DATABASE-$WORKTREE_BASENAME"
+printf '\n%s existing' "$DB_DATABASE"
 SCRIPT
     chmod +x "$FAKE_BIN/php"
 }
@@ -24,7 +24,7 @@ SCRIPT
 @test "hands the derived database to the test command, ignoring PHP notices" {
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
-    [ "${lines[-1]}" = "testing-feature-auth" ]
+    [ "${lines[-1]}" = "testing_wt_feature-auth" ]
 }
 
 @test "does not pass the database name through a shared temp file" {
@@ -45,4 +45,30 @@ SCRIPT
     [ "$status" -ne 0 ]
     [[ "$output" == *"could not derive the per-worktree test database"* ]]
     [ "${lines[-1]}" != "testing" ]
+}
+
+@test "refuses the main checkout's test database when per-worktree databases are off" {
+    sed -i.bak '/^TEST_DB_PER_WORKTREE=/d' "$WORKTREE_DIR/.env.testing"
+    cp "$WORKTREE_DIR/.env.testing" "$MAIN_REPO/.env.testing"
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"main checkout's test database (testing)"* ]]
+}
+
+@test "derives from the main checkout's test database name" {
+    echo "DB_DATABASE=app-testing" > "$MAIN_REPO/.env.testing"
+    sed -i.bak 's/^DB_DATABASE=.*/DB_DATABASE=/' "$WORKTREE_DIR/.env.testing"
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 0 ]
+    [ "${lines[-1]}" = "app-testing_wt_feature-auth" ]
+}
+
+@test "refuses a test database name without \"test\" in it" {
+    echo "DB_DATABASE=myapp" > "$MAIN_REPO/.env.testing"
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"could not derive the per-worktree test database from 'myapp'"* ]]
 }

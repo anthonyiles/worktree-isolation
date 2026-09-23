@@ -15,8 +15,13 @@ class DatabaseResolverTest extends TestCase
     {
         $derived = TestDatabaseResolver::derive('testing', 'Feature/Auth');
 
-        $this->assertSame('testing-feature-auth', $derived);
+        $this->assertSame('testing_wt_feature-auth', $derived);
         $this->assertSame($derived, TestDatabaseResolver::derive($derived, 'Feature/Auth'));
+    }
+
+    public function test_test_database_never_resolves_to_the_base(): void
+    {
+        $this->assertSame('app-testing_wt_testing', TestDatabaseResolver::derive('app-testing', 'testing'));
     }
 
     public function test_dev_database_is_derived_with_marker(): void

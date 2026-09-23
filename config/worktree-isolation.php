@@ -153,7 +153,7 @@ return [
     |--------------------------------------------------------------------------
     |
     | The base database name used when deriving per-worktree database names.
-    | The worktree database will be named: "{base}-{worktree-basename}".
+    | The worktree database will be named: "{base}_wt_{worktree-basename}".
     |
     */
 

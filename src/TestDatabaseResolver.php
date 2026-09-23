@@ -13,17 +13,22 @@ class TestDatabaseResolver
     const int MAX_DERIVED_LENGTH = 40;
 
     /**
-     * Derive a per-worktree test database name from the base name and worktree directory.
+     * Derive a per-worktree test database name: "{base}_wt_{worktree}".
      *
      * @throws InvalidArgumentException
      */
     public static function derive(string $base, string $worktreeBasename): string
     {
-        $suffix = self::worktreeSuffix($worktreeBasename);
+        // The marker can't occur in an ordinary name, so a worktree's own
+        // derived name can be stripped back to the base, and the result can
+        // never be a database the main checkout uses.
+        $base = explode(DevDatabaseResolver::MARKER, $base, 2)[0];
 
-        // The worktree's own .env.testing already holds the derived name
-        // once setup has run, so re-deriving must not append it again.
-        $derived = str_ends_with($base, "-$suffix") ? $base : "$base-$suffix";
+        if ($base === '') {
+            throw new InvalidArgumentException('Cannot derive a per-worktree database name from an empty DB_DATABASE.');
+        }
+
+        $derived = $base.DevDatabaseResolver::MARKER.self::worktreeSuffix($worktreeBasename);
 
         if (! str_contains(strtolower($derived), 'test')) {
             throw new InvalidArgumentException(

@@ -68,6 +68,20 @@ setup() {
     [[ "$output" == *"-p main-feature-auth"* ]]
 }
 
+@test "refuses to run in the main checkout" {
+    cp "$WORKTREE_DIR/.worktree-isolation.env" "$MAIN_REPO/"
+    cd "$MAIN_REPO"
+
+    run bash "$STUBS_DIR/worktree" php -v
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"main checkout"* ]]
+    [ ! -s "$DOCKER_LOG" ]
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"main checkout"* ]]
+}
+
 @test "native passthrough runs from the worktree root" {
     echo "WORKTREE_RUNTIME=native" > "$WORKTREE_DIR/.worktree-isolation.env"
     mkdir -p "$WORKTREE_DIR/app/Models"

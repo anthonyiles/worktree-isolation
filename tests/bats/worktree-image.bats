@@ -42,16 +42,3 @@ ENV
     [[ "$output" == *"-e APP_ENV=testing"* ]]
     [[ "$output" == *"-e DB_DATABASE=testing"* ]]
 }
-
-@test "test forwards a custom resolver class into the container" {
-    cat >> "$WORKTREE_DIR/.worktree-isolation.env" <<'ENV'
-WORKTREE_RESOLVER_CLASS='App\Testing\MyResolver'
-ENV
-    echo "TEST_DB_PER_WORKTREE=true" >> "$WORKTREE_DIR/.env.testing"
-
-    run bash "$STUBS_DIR/test"
-    [ "$status" -eq 0 ]
-
-    run grep -F -- "-e RESOLVER_CLASS=App\Testing\MyResolver" "$DOCKER_LOG"
-    [ "$status" -eq 0 ]
-}

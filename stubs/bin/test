@@ -41,6 +41,7 @@ source "$SCRIPT_DIR/_worktree-lib.sh"
 # 0. Load configuration
 # ---------------------------------------------------------------------------
 load_worktree_config
+require_worktree
 TEST_COMMAND="${WORKTREE_TEST_COMMAND:-php artisan test}"
 
 # ---------------------------------------------------------------------------
@@ -78,16 +79,28 @@ RUN_TESTS='
 '
 
 TEST_ENV=(-e "TEST_COMMAND=$TEST_COMMAND")
+MAIN_TEST_DB="$(main_test_database)"
 
 if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ ]]; then
+    # Derive from the main checkout's name, as setup does.
+    base_db="${MAIN_TEST_DB:-${DB_DATABASE:-}}"
+    if ! DB_DATABASE="$(derive_test_database_name "${base_db:-testing}" "$WORKTREE_BASENAME")"; then
+        echo "Error: could not derive the per-worktree test database from '${base_db:-testing}'." >&2
+        echo "It must contain \"test\" and fit in 40 characters with the worktree name." >&2
+        exit 1
+    fi
     TEST_ENV+=(
         -e "ENSURE_DB_PHP=$ENSURE_DB_PHP"
-        -e "RESOLVER_CLASS=$RESOLVER_CLASS"
         -e "WORKTREE_BASENAME=$WORKTREE_BASENAME"
+        -e "MAIN_DB_DATABASE=$MAIN_TEST_DB"
     )
     for var in DB_DATABASE DB_HOST DB_PORT DB_USERNAME DB_PASSWORD; do
         TEST_ENV+=(-e "$var=${!var:-}")
     done
+elif [[ -n "$MAIN_TEST_DB" && "${DB_DATABASE:-}" == "$MAIN_TEST_DB" ]]; then
+    echo "Error: $TESTING_ENV_FILE points at the main checkout's test database ($MAIN_TEST_DB)." >&2
+    echo "Set ${DB_PER_WORKTREE_KEY}=true in $TESTING_ENV_FILE, or run vendor/bin/worktree setup." >&2
+    exit 1
 fi
 
 # A docker-image container starts fresh, so it also needs the testing env.

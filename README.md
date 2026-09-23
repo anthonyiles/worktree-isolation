@@ -207,11 +207,11 @@ When you run `git worktree add`, the `post-checkout` hook detects the new worktr
 
 1. Copies `.env` from the main repo
 2. Copies `.env.testing` (or falls back to `.env.testing.example`)
-3. Forces `TEST_DB_PER_WORKTREE=true` in the worktree's `.env.testing`
+3. Forces `TEST_DB_PER_WORKTREE=true` in the worktree's `.env.testing`, and writes the worktree's own database names into `.env.testing` and `.env` (see below), so nothing that runs during setup can reach the main checkout's databases
 4. For the `docker-compose` runtime: brings up this worktree's own Compose stack (`docker compose -p <isolated-project-name> up -d`)
 5. Runs `composer install` (via the configured runtime)
-6. Derives the per-worktree test database name, creates it, and writes it as `DB_DATABASE` in the worktree's `.env.testing`
-7. If `WORKTREE_DEV_DB_PER_WORKTREE=true`: derives the per-worktree development database name, creates it, writes it as `DB_DATABASE` in the worktree's `.env`, then migrates it (and seeds it, if it was just created)
+6. Creates the per-worktree test database
+7. If `WORKTREE_DEV_DB_PER_WORKTREE=true`: creates the per-worktree development database, migrates it, and seeds it if it was just created
 8. Runs `npm install` (via the configured runtime)
 
 ### Per-Worktree Test Databases
@@ -219,12 +219,14 @@ When you run `git worktree add`, the `post-checkout` hook detects the new worktr
 The database name is derived from the worktree directory:
 
 ```
-testing-{worktree-folder-name}
+{DB_DATABASE}_wt_{worktree-folder-name}
 ```
 
-For example, a worktree at `../worktrees/my-project/feature-auth` gets database `testing-feature-auth`. A safety guard ensures the derived name always contains "test" to prevent accidental use of production databases.
+For example, with `DB_DATABASE=testing` in the main repo's `.env.testing`, a worktree at `../worktrees/my-project/feature-auth` gets database `testing_wt_feature-auth`. The derived name must contain "test", and setup and `vendor/bin/worktree test` refuse any name that matches the main checkout's own test database.
 
-Because this name is written directly into `.env.testing` at bootstrap time (step 6 above), it applies no matter how you run tests — `vendor/bin/worktree test`, `sail test`, `php artisan test`, `vendor/bin/phpunit`, or anything else that reads `.env.testing` the normal way. `vendor/bin/worktree test` also re-derives and re-creates the database dynamically on every run, so it stays correct even if step 6 failed at setup time (e.g. the database wasn't reachable yet) or the worktree directory gets renamed later.
+Earlier versions named these `testing-{worktree-folder-name}`. Re-running `vendor/bin/worktree setup` in an existing worktree switches it to the new name; `vendor/bin/worktree clean` still finds the old ones.
+
+Because this name is written directly into `.env.testing` at bootstrap time (step 3 above), it applies no matter how you run tests — `vendor/bin/worktree test`, `sail test`, `php artisan test`, `vendor/bin/phpunit`, or anything else that reads `.env.testing` the normal way. `vendor/bin/worktree test` also re-derives and re-creates the database dynamically on every run, so it stays correct even if step 6 failed at setup time (e.g. the database wasn't reachable yet) or the worktree directory gets renamed later.
 
 ### Per-Worktree Development Databases
 
@@ -234,7 +236,7 @@ Each worktree also gets its own development database, so `php artisan migrate` (
 {DB_DATABASE}_wt_{worktree-folder-name}
 ```
 
-For example, with `DB_DATABASE=myapp` in the main repo's `.env`, a worktree at `../worktrees/my-project/feature-auth` gets `myapp_wt_feature-auth`, written into that worktree's `.env`. The main repo's `.env` is never modified.
+For example, with `DB_DATABASE=myapp` in the main repo's `.env`, a worktree at `../worktrees/my-project/feature-auth` gets `myapp_wt_feature-auth`, written into that worktree's `.env`. The main repo's `.env` is never modified. If no valid name can be derived (for example, it would be too long), the worktree's `DB_DATABASE` is left blank rather than pointing at the main checkout's. If the name is fine but the database can't be created, `.env` still points at it; re-run `vendor/bin/worktree setup` once the problem is fixed.
 
 Setup then runs `WORKTREE_DEV_DB_MIGRATE_COMMAND` (default `php artisan migrate --no-interaction`) every time, and `WORKTREE_DEV_DB_SEED_COMMAND` (default `php artisan db:seed --no-interaction`) only when the database was just created, since seeders usually aren't safe to re-run. Set either to an empty value to skip it, or point them at your own scripts for non-Laravel projects:
 
@@ -293,7 +295,7 @@ vendor/bin/worktree clean
 # or: php artisan worktree:clean  (Laravel projects)
 ```
 
-This lists all databases matching `{base}-*` (test, from `.env.testing`) and `{base}_wt_*` (development, from `.env`) and asks for confirmation before dropping them. Use `--force` to skip the prompt.
+This lists all databases matching `{base}_wt_*` (test and development, with bases from the main repo's `.env.testing` and `.env`) plus older `{base}-*` test databases, and asks for confirmation before dropping them. The main checkout's own databases are never included. Use `--force` to skip the prompt.
 
 ## Configuration
 

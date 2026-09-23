@@ -18,8 +18,8 @@ load_worktree_config() {
 
     RUNTIME="${WORKTREE_RUNTIME:-native}"
     TESTING_ENV_FILE="${WORKTREE_TESTING_ENV_FILE:-.env.testing}"
+    TESTING_ENV_EXAMPLE="${WORKTREE_TESTING_ENV_EXAMPLE:-.env.testing.example}"
     DB_PER_WORKTREE_KEY="${WORKTREE_DB_PER_WORKTREE_KEY:-TEST_DB_PER_WORKTREE}"
-    RESOLVER_CLASS="${WORKTREE_RESOLVER_CLASS:-WorktreeIsolation\\TestDatabaseResolver}"
 
     # docker-image driver settings
     IMAGE="${WORKTREE_DOCKER_IMAGE:-}"
@@ -28,6 +28,13 @@ load_worktree_config() {
 
     # docker-compose driver settings
     COMPOSE_SERVICE="${WORKTREE_COMPOSE_SERVICE:-app}"
+}
+
+require_worktree() {
+    if [[ "$(git rev-parse --path-format=absolute --git-dir)" == "$(git rev-parse --path-format=absolute --git-common-dir)" ]]; then
+        echo "Error: this is the main checkout, not a git worktree. Run this from inside a worktree." >&2
+        exit 1
+    fi
 }
 
 validate_runtime() {
@@ -43,7 +50,7 @@ validate_runtime() {
             if [[ -z "$base" ]]; then
                 # Configs written before install recorded this: fall back to
                 # what install derives, the main checkout's directory name.
-                base="$(slugify "$(basename "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")")")"
+                base="$(slugify "$(basename "$(main_checkout_dir)")")"
             fi
             COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$base" "$WORKTREE_BASENAME")"
             COMPOSE_ARGS=(docker compose -p "$COMPOSE_PROJECT_NAME")
@@ -69,6 +76,24 @@ validate_runtime() {
     esac
 }
 
+main_checkout_dir() {
+    dirname "$(git rev-parse --path-format=absolute --git-common-dir)"
+}
+
+# The main checkout's own database names. Worktrees derive theirs from these
+# and must never end up using them.
+main_dev_database() {
+    env_file_value "$(main_checkout_dir)/.env" DB_DATABASE
+}
+
+main_test_database() {
+    local main_dir name
+    main_dir="$(main_checkout_dir)"
+    name="$(env_file_value "$main_dir/$TESTING_ENV_FILE" DB_DATABASE)"
+    [[ -n "$name" ]] || name="$(env_file_value "$main_dir/$TESTING_ENV_EXAMPLE" DB_DATABASE)"
+    echo "$name"
+}
+
 # Same sanitization as TestDatabaseResolver::worktreeSuffix() and
 # worktree-install's sanitizeComposeProjectBase(): lowercase, collapse
 # anything outside [a-z0-9] into a single hyphen, trim leading/trailing
@@ -83,14 +108,41 @@ derive_compose_project_name() {
     echo "$1-$(slugify "$2")"
 }
 
-# Derives and creates a per-worktree database. Runs from the project root
-# with RESOLVER_CLASS, WORKTREE_BASENAME and DB_* in its environment, and
-# prints "<name> created|existing" as its last line; the leading newline
-# keeps that line intact if PHP emitted a notice first.
+# Must match DevDatabaseResolver::derive() and TestDatabaseResolver::derive().
+# Setup writes these names before the stack starts, so they can't wait for
+# PHP inside the runtime.
+derive_worktree_database_name() {
+    local base="${1%%_wt_*}" derived
+    [[ -n "$base" ]] || return 1
+    derived="${base}_wt_$(slugify "$2")"
+    (( ${#derived} <= $3 )) || return 1
+    echo "$derived"
+}
+
+derive_dev_database_name() {
+    derive_worktree_database_name "$1" "$2" 64
+}
+
+derive_test_database_name() {
+    local derived
+    derived="$(derive_worktree_database_name "$1" "$2" 40)" || return 1
+    [[ "$(echo "$derived" | tr '[:upper:]' '[:lower:]')" == *test* ]] || return 1
+    echo "$derived"
+}
+
+# Creates a per-worktree database, re-deriving its name with the PHP
+# resolver as a cross-check. Runs from the project root with RESOLVER_CLASS
+# (defaults to the test resolver), WORKTREE_BASENAME, MAIN_DB_DATABASE and
+# DB_* in its environment, and prints "<name> created|existing" as its last line; the
+# leading newline keeps that line intact if PHP emitted a notice first.
 ENSURE_DB_PHP='
     require "vendor/autoload.php";
     $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
     $name = $class::derive(getenv("DB_DATABASE") ?: "testing", getenv("WORKTREE_BASENAME") ?: "worktree");
+    if ($name === getenv("MAIN_DB_DATABASE")) {
+        fwrite(STDERR, "Refusing to use $name: it is the main checkout database.\n");
+        exit(1);
+    }
     $created = $class::ensureExists(
         $name,
         getenv("DB_HOST") ?: "127.0.0.1",
@@ -185,7 +237,7 @@ run_in_runtime() {
 # guaranteed to be valid shell).
 env_file_value() {
     local file="$1" key="$2" value
-    value="$(grep -E "^${key}=" "$file" | tail -n 1)" || return 0
+    value="$(grep -E "^${key}=" "$file" 2> /dev/null | tail -n 1)" || return 0
     value="${value#*=}"
     value="${value%\"}"
     value="${value#\"}"
