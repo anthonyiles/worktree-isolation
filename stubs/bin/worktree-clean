@@ -28,10 +28,9 @@ if (isset($opts['help'])) {
     fwrite(STDOUT, <<<HELP
     Usage: vendor/bin/worktree clean [OPTIONS]
 
-    Drops all per-worktree test databases ("{base}_wt_*", plus the older
-    "{base}-*" naming, from .env.testing) and development databases
-    ("{base}_wt_*", from .env). The main checkout's own databases are never
-    dropped.
+    Drops all per-worktree test databases ("{base}_wt_*", from .env.testing)
+    and development databases ("{base}_wt_*", from .env). The main
+    checkout's own databases are never dropped.
 
     Options:
       --force            Drop databases without confirmation
@@ -66,16 +65,12 @@ foreach ($targets as $target) {
         exit(1);
     }
 
-    $databases = [];
     $stmt = $pdo->prepare('SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?');
-    foreach ($target['patterns'] as $pattern) {
-        $stmt->execute([$pattern]);
-        $databases = [...$databases, ...$stmt->fetchAll(PDO::FETCH_COLUMN)];
-    }
-    $databases = array_values(array_diff(array_unique($databases), $protected, array_column($found, 1)));
+    $stmt->execute([$target['pattern']]);
+    $databases = array_values(array_diff($stmt->fetchAll(PDO::FETCH_COLUMN), $protected, array_column($found, 1)));
 
     if (empty($databases)) {
-        echo "No per-worktree {$target['label']} databases found (pattern: " . implode(', ', $target['patterns']) . ").\n";
+        echo "No per-worktree {$target['label']} databases found (pattern: {$target['pattern']}).\n";
         continue;
     }
 
@@ -145,7 +140,7 @@ function mainCheckoutDir(string $projectDir): string
  * Bases come from the main checkout's env files, which hold the plain names
  * every worktree's are derived from.
  *
- * @return list<array{label: string, file: string, env: array<string, string>, patterns: list<string>}>
+ * @return list<array{label: string, file: string, env: array<string, string>, pattern: string}>
  */
 function cleanupTargets(string $projectDir, string $mainDir): array
 {
@@ -158,11 +153,7 @@ function cleanupTargets(string $projectDir, string $mainDir): array
         'label' => 'test',
         'file' => $testingFile,
         'env' => $testingEnv,
-        'patterns' => [
-            escapeLike($testBase . WORKTREE_DB_MARKER) . '%',
-            // Names from before test databases used the marker.
-            escapeLike($testBase) . '-%',
-        ],
+        'pattern' => escapeLike($testBase . WORKTREE_DB_MARKER) . '%',
     ]];
 
     $devEnabled = in_array($conf['WORKTREE_DEV_DB_PER_WORKTREE'] ?? 'false', ['true', '1'], true);
@@ -173,7 +164,7 @@ function cleanupTargets(string $projectDir, string $mainDir): array
             'label' => 'development',
             'file' => '.env',
             'env' => $devEnv,
-            'patterns' => [escapeLike($devBase . WORKTREE_DB_MARKER) . '%'],
+            'pattern' => escapeLike($devBase . WORKTREE_DB_MARKER) . '%',
         ];
     }
 

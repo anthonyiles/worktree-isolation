@@ -224,8 +224,6 @@ The database name is derived from the worktree directory:
 
 For example, with `DB_DATABASE=testing` in the main repo's `.env.testing`, a worktree at `../worktrees/my-project/feature-auth` gets database `testing_wt_feature-auth`. The derived name must contain "test", and setup and `vendor/bin/worktree test` refuse any name that matches the main checkout's own test database.
 
-Earlier versions named these `testing-{worktree-folder-name}`. Re-running `vendor/bin/worktree setup` in an existing worktree switches it to the new name; `vendor/bin/worktree clean` still finds the old ones.
-
 Because this name is written directly into `.env.testing` at bootstrap time (step 3 above), it applies no matter how you run tests — `vendor/bin/worktree test`, `sail test`, `php artisan test`, `vendor/bin/phpunit`, or anything else that reads `.env.testing` the normal way. `vendor/bin/worktree test` also re-derives and re-creates the database dynamically on every run, so it stays correct even if step 6 failed at setup time (e.g. the database wasn't reachable yet) or the worktree directory gets renamed later.
 
 ### Per-Worktree Development Databases
@@ -295,7 +293,7 @@ vendor/bin/worktree clean
 # or: php artisan worktree:clean  (Laravel projects)
 ```
 
-This lists all databases matching `{base}_wt_*` (test and development, with bases from the main repo's `.env.testing` and `.env`) plus older `{base}-*` test databases, and asks for confirmation before dropping them. The main checkout's own databases are never included. Use `--force` to skip the prompt.
+This lists all databases matching `{base}_wt_*` (test and development, with bases from the main repo's `.env.testing` and `.env`) and asks for confirmation before dropping them. The main checkout's own databases are never included. Use `--force` to skip the prompt.
 
 ## Configuration
 
