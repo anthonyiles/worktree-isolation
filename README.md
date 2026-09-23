@@ -37,29 +37,9 @@ alias worktree='vendor/bin/worktree'
 
 [Running Arbitrary Commands](#running-arbitrary-commands) covers the passthrough form in full.
 
-Then pick the section that matches your setup:
-
-- [Native PHP](#native-php) — Herd, Valet, or any local PHP/Node install
-- [Docker Compose](#docker-compose) — an app service defined in `docker-compose.yml`
-- [Laravel Sail](#laravel-sail) — Sail, or any other standalone Docker image
-
----
-
-### Native PHP
-
-For Herd, Valet, or any setup where `composer`, `npm`, and your test runner already run directly on the host.
-
-```bash
-vendor/bin/worktree install
-# or: php artisan worktree:install  (Laravel projects)
-```
-
-This is the default runtime, so no `--runtime` flag is needed. It writes `.worktree-isolation.env`:
+Whichever runtime you pick below, `vendor/bin/worktree install` always writes these same lines to `.worktree-isolation.env` — identical in every scenario, so they're covered once here instead of three times:
 
 ```env
-# Runtime driver: native | docker-compose | docker-image
-WORKTREE_RUNTIME=native
-
 # Test command (default: php artisan test)
 # WORKTREE_TEST_COMMAND=php vendor/bin/phpunit
 
@@ -71,39 +51,69 @@ WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
 
 Non-Laravel projects should also set `WORKTREE_TEST_COMMAND` — see [Custom Test Command](#custom-test-command).
 
+Now pick the section that matches your setup. Each gives the exact install command plus the runtime-specific lines it adds on top of the common settings above:
+
+- [Native PHP](#native-php) — Herd, Valet, or any local PHP/Node install
+- [Docker Compose](#docker-compose) — an app service defined in `docker-compose.yml`
+- [Laravel Sail](#laravel-sail) — Sail, or any other standalone Docker image
+
+---
+
+### Native PHP
+
+For Herd, Valet, or any setup where `composer`, `npm`, and your test runner already run directly on the host.
+
+**1. Install**
+
+```bash
+vendor/bin/worktree install
+# or: php artisan worktree:install  (Laravel projects)
+```
+
+This is the default runtime, so no `--runtime` flag is needed.
+
+**2. Configure**
+
+Nothing to pass in — this writes only:
+
+```env
+# Runtime driver: native | docker-compose | docker-image
+WORKTREE_RUNTIME=native
+```
+
+plus the [common settings](#installation) above. There's nothing else to configure: Composer, npm, and your test runner already work on the host.
+
 ---
 
 ### Docker Compose
 
 For projects where the app runs as a service in `docker-compose.yml`.
 
+**1. Install**
+
 ```bash
 vendor/bin/worktree install --runtime=docker-compose --compose-service=app
 # or: php artisan worktree:install --runtime=docker-compose --compose-service=app
 ```
 
-`--compose-service` should match the service name in your `docker-compose.yml` that has PHP, Composer, and Node available (default: `app`). This writes:
+`--compose-service` should match the service name in your `docker-compose.yml` that has PHP, Composer, and Node available (default: `app`).
+
+**2. Configure**
+
+This writes:
 
 ```env
 WORKTREE_RUNTIME=docker-compose
-
-# Test command (default: php artisan test)
-# WORKTREE_TEST_COMMAND=php vendor/bin/phpunit
-
-# docker-compose runtime settings
 WORKTREE_COMPOSE_SERVICE=app
 # WORKTREE_COMPOSE_FILE=docker-compose.yml
 WORKTREE_COMPOSE_PROJECT_BASE=my-project
-
-# Common settings
-WORKTREE_TESTING_ENV_FILE=.env.testing
-WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
-WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
 ```
 
-`vendor/bin/worktree setup` brings up its **own** Compose stack for each worktree — `docker compose up -d` — under an isolated `-p <project>` derived from `WORKTREE_COMPOSE_PROJECT_BASE` and the worktree's directory name (e.g. `my-project-feature-auth`), the same way the per-worktree test database name is derived. `composer install`, `npm install`, and `vendor/bin/worktree test` all pass that same `-p` flag through to `docker compose exec`, so each worktree's stack — containers, networks, volumes — stays completely separate from every other worktree's. `docker compose up -d` before `git worktree add` is no longer something you need to do by hand.
+plus the [common settings](#installation) above. `WORKTREE_COMPOSE_PROJECT_BASE` defaults to your project directory's name (sanitized: lowercased, non-alphanumeric characters collapsed to `-`); override it with `--compose-project-base=NAME` at install time if that would collide with an unrelated project on the same Docker host.
 
-`WORKTREE_COMPOSE_PROJECT_BASE` defaults to your project directory's name (sanitized: lowercased, non-alphanumeric characters collapsed to `-`); override it with `--compose-project-base=NAME` at install time if that would collide with an unrelated project on the same Docker host.
+**3. What this gets you**
+
+`vendor/bin/worktree setup` brings up its **own** Compose stack for each worktree — `docker compose up -d` — under an isolated `-p <project>` derived from `WORKTREE_COMPOSE_PROJECT_BASE` and the worktree's directory name (e.g. `my-project-feature-auth`), the same way the per-worktree test database name is derived. `composer install`, `npm install`, and `vendor/bin/worktree test` all pass that same `-p` flag through to `docker compose exec`, so each worktree's stack — containers, networks, volumes — stays completely separate from every other worktree's. `docker compose up -d` before `git worktree add` is no longer something you need to do by hand.
 
 **Not covered by this:** fixed host port bindings in your `docker-compose.yml` (e.g. `8080:80`) will still collide across worktrees — parameterize those yourself (e.g. `${APP_PORT:-8080}:80`) if you plan to run multiple worktrees' stacks at once. `vendor/bin/worktree test` assumes `vendor/bin/worktree setup` already brought the stack up for that worktree; if it hasn't, `docker compose exec` fails with Docker's normal error.
 
@@ -120,6 +130,8 @@ vendor/bin/worktree npm run build
 
 Sail is just Laravel's name for a pre-built Docker image, so it uses the `docker-image` runtime — this also covers any other standalone Docker image (non-Sail) the same way, just with different `--docker-image`/`--docker-network` values.
 
+**1. Install**
+
 ```bash
 vendor/bin/worktree install --runtime=docker-image --docker-image="sail-8.5/app" --docker-network="myproject_sail"
 # or: php artisan worktree:install --runtime=docker-image --docker-image="sail-8.5/app" --docker-network="myproject_sail"
@@ -128,26 +140,20 @@ vendor/bin/worktree install --runtime=docker-image --docker-image="sail-8.5/app"
 - `--docker-image` — the image Sail already built (check with `docker images`, or see `vendor/bin/sail` config; typically `<project>-<php-version>/app`)
 - `--docker-network` — the Docker network Sail's containers (including MySQL) run on, so the ephemeral test container can reach them (typically `<project>_sail`)
 
+**2. Configure**
+
 This writes:
 
 ```env
 WORKTREE_RUNTIME=docker-image
-
-# Test command (default: php artisan test)
-# WORKTREE_TEST_COMMAND=php vendor/bin/phpunit
-
-# docker-image runtime settings
 WORKTREE_DOCKER_IMAGE=sail-8.5/app
 WORKTREE_DOCKER_NETWORK=myproject_sail
 # WORKTREE_DOCKER_WORKDIR=/var/www/html
-
-# Common settings
-WORKTREE_TESTING_ENV_FILE=.env.testing
-WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
-WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
 ```
 
-`composer install`, `npm install`, and your test command each run via a throwaway `docker run --rm` against that image, attached to the given network — the image must already be built (`vendor/bin/sail build`, or `docker compose build` for a non-Sail standalone image).
+plus the [common settings](#installation) above. `composer install`, `npm install`, and your test command each run via a throwaway `docker run --rm` against that image, attached to the given network — the image must already be built (`vendor/bin/sail build`, or `docker compose build` for a non-Sail standalone image).
+
+**3. Important**
 
 **Don't call `vendor/bin/sail` (or `docker compose`) directly from inside a worktree.** Sail's own CLI checks whether its containers are already running and, if so, `exec`s straight into them instead of starting fresh — and that container's bind mount is fixed to wherever it was originally started (normally your main checkout, since that's the stack `WORKTREE_DOCKER_NETWORK` points at). Run `sail composer install` or `sail artisan test` from a worktree and you'll silently install dependencies or run tests against the **main checkout's files**, not the worktree's — the exact bug this package exists to prevent, just reached via Sail's CLI instead of raw Docker Compose. `vendor/bin/worktree setup` and `vendor/bin/worktree test` sidestep this entirely: they never call `sail`, they run `docker run --rm -v <this-worktree>:...` directly against the built image, so the bind mount is always correct. Always use `vendor/bin/worktree test` / `vendor/bin/worktree setup` instead of Sail's CLI once you're working across worktrees.
 
