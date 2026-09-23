@@ -49,6 +49,7 @@ $targets = cleanupTargets($projectDir, $mainDir);
 $protected = protectedDatabases($mainDir);
 
 $found = [];
+$exitCode = 0;
 foreach ($targets as $target) {
     $env = $target['env'];
     $host = $env['DB_HOST'] ?? '127.0.0.1';
@@ -59,10 +60,11 @@ foreach ($targets as $target) {
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         ]);
     } catch (PDOException $e) {
-        fwrite(STDERR, "Error: Could not connect to database at $host:$port\n");
+        fwrite(STDERR, "Error: Could not connect to the {$target['label']} database server at $host:$port\n");
         fwrite(STDERR, "  " . $e->getMessage() . "\n\n");
-        fwrite(STDERR, "  Check DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD in {$target['file']}\n");
-        exit(1);
+        fwrite(STDERR, "  Check DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD in {$target['file']}\n\n");
+        $exitCode = 1;
+        continue;
     }
 
     $stmt = $pdo->prepare('SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?');
@@ -83,7 +85,7 @@ foreach ($targets as $target) {
 }
 
 if (empty($found)) {
-    exit(0);
+    exit($exitCode);
 }
 
 if (! $force) {
@@ -91,7 +93,7 @@ if (! $force) {
     $answer = trim(fgets(STDIN) ?: '');
     if (! in_array(strtolower($answer), ['y', 'yes'], true)) {
         echo "Aborted.\n";
-        exit(0);
+        exit($exitCode);
     }
 }
 
@@ -112,7 +114,7 @@ foreach ($found as [$pdo, $name]) {
 }
 
 echo "\nDone. $dropped database(s) removed.\n";
-exit(0);
+exit($exitCode);
 
 // ---------------------------------------------------------------------------
 // Functions
@@ -146,20 +148,28 @@ function cleanupTargets(string $projectDir, string $mainDir): array
 {
     $conf = parseEnvFile("$projectDir/.worktree-isolation.env");
 
+    $targets = [];
+
+    // Same lookup order as main_test_database() in _worktree-lib.sh.
     $testingFile = $conf['WORKTREE_TESTING_ENV_FILE'] ?? '.env.testing';
-    $testingEnv = parseEnvFile("$mainDir/$testingFile") ?: parseEnvFile("$projectDir/$testingFile");
+    $testingExample = $conf['WORKTREE_TESTING_ENV_EXAMPLE'] ?? '.env.testing.example';
+    $testingEnv = parseEnvFile("$mainDir/$testingFile")
+        ?: parseEnvFile("$mainDir/$testingExample")
+        ?: parseEnvFile("$projectDir/$testingFile");
     $testBase = explode(WORKTREE_DB_MARKER, $testingEnv['DB_DATABASE'] ?? '', 2)[0] ?: 'testing';
-    $targets = [[
-        'label' => 'test',
-        'file' => $testingFile,
-        'env' => $testingEnv,
-        'pattern' => escapeLike($testBase . WORKTREE_DB_MARKER) . '%',
-    ]];
+    if (isMysqlConnection($testingEnv)) {
+        $targets[] = [
+            'label' => 'test',
+            'file' => $testingFile,
+            'env' => $testingEnv,
+            'pattern' => escapeLike($testBase . WORKTREE_DB_MARKER) . '%',
+        ];
+    }
 
     $devEnabled = in_array($conf['WORKTREE_DEV_DB_PER_WORKTREE'] ?? 'false', ['true', '1'], true);
     $devEnv = parseEnvFile("$mainDir/.env") ?: parseEnvFile("$projectDir/.env");
     $devBase = explode(WORKTREE_DB_MARKER, $devEnv['DB_DATABASE'] ?? '', 2)[0];
-    if ($devEnabled && $devBase !== '' && in_array($devEnv['DB_CONNECTION'] ?? '', ['mysql', 'mariadb'], true)) {
+    if ($devEnabled && $devBase !== '' && isMysqlConnection($devEnv)) {
         $targets[] = [
             'label' => 'development',
             'file' => '.env',
@@ -183,6 +193,11 @@ function protectedDatabases(string $mainDir): array
         fn (string $file) => parseEnvFile("$mainDir/$file")['DB_DATABASE'] ?? '',
         $files
     )));
+}
+
+function isMysqlConnection(array $env): bool
+{
+    return in_array($env['DB_CONNECTION'] ?? '', ['mysql', 'mariadb'], true);
 }
 
 function escapeLike(string $value): string
