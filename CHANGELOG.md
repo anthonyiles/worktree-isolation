@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.4.0](https://github.com/anthonyiles/worktree-isolation/compare/v1.3.0...v1.4.0) (2026-09-24)
+
+
+### Features
+
+* detect Laravel Sail in worktree install ([162cf71](https://github.com/anthonyiles/worktree-isolation/commit/162cf711c53bb7f14a59892752d4ee717a686d79))
+
+
+### Bug Fixes
+
+* handle an empty WORKTREE_EXTRA_ENV_VARS on bash &lt; 4.4 ([2434e97](https://github.com/anthonyiles/worktree-isolation/commit/2434e97a08c49cdd30765424b3140e71986768c3))
+* run Docker runtime commands as the host user ([13b5ad2](https://github.com/anthonyiles/worktree-isolation/commit/13b5ad2dad9d0622be95c9988de55db24e0f25ed))
+* run worktree clean inside the Docker runtime ([0b99a8d](https://github.com/anthonyiles/worktree-isolation/commit/0b99a8d81da13fa3d68dad00445a089394f7cd8d))
+
 ## [1.3.0](https://github.com/anthonyiles/worktree-isolation/compare/v1.2.0...v1.3.0) (2026-09-24)
 
 
