@@ -138,8 +138,14 @@ Sail is just Laravel's name for a pre-built Docker image, so it uses the `docker
 **1. Install**
 
 ```bash
+vendor/bin/worktree install
+# or: php artisan worktree:install
+```
+
+Run it on the host, not through `sail`. When `vendor/bin/sail` and a Compose file are present and no `--runtime` is given, install detects Sail and fills in the runtime, the image (the `sail-*` image in your Compose file) and the network (`<COMPOSE_PROJECT_NAME or directory name>_sail`). Override either with explicit options:
+
+```bash
 vendor/bin/worktree install --runtime=docker-image --docker-image="sail-8.5/app" --docker-network="myproject_sail"
-# or: php artisan worktree:install --runtime=docker-image --docker-image="sail-8.5/app" --docker-network="myproject_sail"
 ```
 
 - `--docker-image` — the image Sail already built (check with `docker images`, or see `vendor/bin/sail` config; typically `<project>-<php-version>/app`)
