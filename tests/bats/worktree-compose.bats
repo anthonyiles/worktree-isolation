@@ -125,3 +125,39 @@ SCRIPT
     run grep -- "up -d" "$DOCKER_LOG"
     [[ "$output" == *"WWWUSER=4242"* ]]
 }
+
+install_stubs_in_vendor() {
+    VENDOR_BIN="$1/vendor/anthonyiles/worktree-isolation/stubs/bin"
+    mkdir -p "$VENDOR_BIN"
+    cp "$STUBS_DIR"/* "$VENDOR_BIN/"
+}
+
+@test "runs clean inside the worktree's stack, where DB_HOST resolves" {
+    install_stubs_in_vendor "$WORKTREE_DIR"
+
+    run bash "$VENDOR_BIN/worktree" clean --force
+    [ "$status" -eq 0 ]
+
+    run grep -- " exec " "$DOCKER_LOG"
+    [[ "$output" == *"-p myapp-feature-auth"* ]]
+    [[ "$output" == *"app php vendor/anthonyiles/worktree-isolation/stubs/bin/worktree-clean --force"* ]]
+}
+
+@test "runs clean from the main checkout inside its default-project stack" {
+    install_stubs_in_vendor "$MAIN_REPO"
+    cp "$WORKTREE_DIR/.worktree-isolation.env" "$MAIN_REPO/"
+    cd "$MAIN_REPO"
+
+    run bash "$VENDOR_BIN/worktree" clean
+    [ "$status" -eq 0 ]
+
+    run grep -- " exec " "$DOCKER_LOG"
+    [[ "$output" != *"-p "* ]]
+    [[ "$output" == *"app php vendor/anthonyiles/worktree-isolation/stubs/bin/worktree-clean"* ]]
+}
+
+@test "refuses to run clean in the runtime when the package is outside the project" {
+    run bash "$STUBS_DIR/worktree" clean
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"is outside the project"* ]]
+}

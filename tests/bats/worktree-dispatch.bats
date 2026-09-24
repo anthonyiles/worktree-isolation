@@ -13,7 +13,7 @@ setup() {
 
     DISPATCH_DIR="$BATS_TEST_TMPDIR/bin"
     mkdir -p "$DISPATCH_DIR"
-    cp "$REAL_STUBS_DIR/worktree" "$DISPATCH_DIR/worktree"
+    cp "$REAL_STUBS_DIR/worktree" "$REAL_STUBS_DIR/_worktree-lib.sh" "$DISPATCH_DIR/"
     chmod +x "$DISPATCH_DIR/worktree"
 
     LOG="$BATS_TEST_TMPDIR/calls.log"

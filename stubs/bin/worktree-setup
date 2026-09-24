@@ -55,7 +55,7 @@ validate_runtime
 # ---------------------------------------------------------------------------
 # 2. Resolve the main checkout
 # ---------------------------------------------------------------------------
-if [[ "$(git rev-parse --path-format=absolute --git-dir)" == "$(git rev-parse --path-format=absolute --git-common-dir)" ]]; then
+if in_main_checkout; then
     echo "This directory is the main repo, not a worktree. Nothing to set up." >&2
     exit 0
 fi

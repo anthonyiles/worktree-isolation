@@ -303,6 +303,8 @@ vendor/bin/worktree clean
 
 This lists all databases matching `{base}_wt_*` (test and development, with bases from the main repo's `.env.testing` and `.env`) and asks for confirmation before dropping them. The main checkout's own databases are never included. Use `--force` to skip the prompt.
 
+With a Docker runtime, `worktree clean` runs inside the container (the current worktree's stack, or the main checkout's own stack when run there), so a `DB_HOST` like `mysql` resolves just as it does for the app.
+
 ## Configuration
 
 ### Runtime Drivers

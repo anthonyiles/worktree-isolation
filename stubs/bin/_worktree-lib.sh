@@ -35,8 +35,12 @@ load_worktree_config() {
     CONTAINER_USER_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp)
 }
 
+in_main_checkout() {
+    [[ "$(git rev-parse --path-format=absolute --git-dir)" == "$(git rev-parse --path-format=absolute --git-common-dir)" ]]
+}
+
 require_worktree() {
-    if [[ "$(git rev-parse --path-format=absolute --git-dir)" == "$(git rev-parse --path-format=absolute --git-common-dir)" ]]; then
+    if in_main_checkout; then
         echo "Error: this is the main checkout, not a git worktree. Run this from inside a worktree." >&2
         exit 1
     fi
@@ -51,14 +55,18 @@ validate_runtime() {
                 echo "Error: 'docker compose' not found. Install Docker with the Compose plugin." >&2
                 exit 1
             fi
-            local base="${WORKTREE_COMPOSE_PROJECT_BASE:-}"
-            if [[ -z "$base" ]]; then
-                # Configs written before install recorded this: fall back to
-                # what install derives, the main checkout's directory name.
-                base="$(slugify "$(basename "$(main_checkout_dir)")")"
+            COMPOSE_ARGS=(docker compose)
+            # The main checkout's stack runs under Compose's default project name.
+            if ! in_main_checkout; then
+                local base="${WORKTREE_COMPOSE_PROJECT_BASE:-}"
+                if [[ -z "$base" ]]; then
+                    # Configs written before install recorded this: fall back to
+                    # what install derives, the main checkout's directory name.
+                    base="$(slugify "$(basename "$(main_checkout_dir)")")"
+                fi
+                COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$base" "$WORKTREE_BASENAME")"
+                COMPOSE_ARGS+=(-p "$COMPOSE_PROJECT_NAME")
             fi
-            COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$base" "$WORKTREE_BASENAME")"
-            COMPOSE_ARGS=(docker compose -p "$COMPOSE_PROJECT_NAME")
             if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
                 COMPOSE_ARGS+=(-f "$WORKTREE_COMPOSE_FILE")
             fi
