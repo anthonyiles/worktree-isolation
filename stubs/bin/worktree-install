@@ -41,7 +41,9 @@ if (isset($opts['help'])) {
     Usage: vendor/bin/worktree install [OPTIONS]
 
     Options:
-      --runtime=DRIVER              Runtime driver: native (default), docker-compose, docker-image
+      --runtime=DRIVER              Runtime driver: native, docker-compose, docker-image
+                                     (default: docker-image when Laravel Sail is detected,
+                                     else native)
       --docker-image=NAME           Docker image name (docker-image runtime)
       --docker-network=NAME         Docker network name (docker-image runtime)
       --compose-service=NAME        Docker Compose service name (docker-compose runtime, default: app)
@@ -60,15 +62,33 @@ if (isset($opts['help'])) {
     exit(0);
 }
 
-$runtime = $opts['runtime'] ?? 'native';
 $force = isset($opts['force']);
 
-if (! in_array($runtime, $validRuntimes, true)) {
-    fwrite(STDERR, "Error: Invalid runtime '$runtime'. Use: " . implode(', ', $validRuntimes) . "\n");
+if (isset($opts['runtime']) && ! in_array($opts['runtime'], $validRuntimes, true)) {
+    fwrite(STDERR, "Error: Invalid runtime '{$opts['runtime']}'. Use: " . implode(', ', $validRuntimes) . "\n");
+    exit(1);
+}
+
+// Inside Sail's container the project path and git differ from the host's,
+// so the hook path written to git config would be wrong.
+if (getenv('LARAVEL_SAIL') === '1') {
+    fwrite(STDERR, "Error: Run the installer on the host, not inside Sail\n");
+    fwrite(STDERR, "  (vendor/bin/worktree install or php artisan worktree:install, without sail).\n");
     exit(1);
 }
 
 $projectDir = $opts['project-dir'] ?? resolveProjectRoot();
+
+$runtime = $opts['runtime'] ?? null;
+if ($runtime === null) {
+    $sail = detectSail($projectDir);
+    if ($sail !== null) {
+        $runtime = 'docker-image';
+        $opts += ['docker-image' => $sail['image'], 'docker-network' => $sail['network']];
+    } else {
+        $runtime = 'native';
+    }
+}
 $stubsDir = $opts['stubs-dir'] ?? findStubsDir($projectDir);
 
 if ($stubsDir === null) {
@@ -78,6 +98,10 @@ if ($stubsDir === null) {
 }
 
 echo "Installing worktree isolation...\n\n";
+
+if (isset($sail)) {
+    echo "  Detected Laravel Sail: using the docker-image runtime\n";
+}
 
 // 1. Verify git version
 if (! verifyGitVersion()) {
@@ -139,6 +163,47 @@ function findStubsDir(string $projectDir): ?string
     }
 
     return null;
+}
+
+/**
+ * @return array{image: string, network: string}|null
+ */
+function detectSail(string $projectDir): ?array
+{
+    if (! file_exists("$projectDir/vendor/bin/sail")) {
+        return null;
+    }
+
+    $composeFile = null;
+    foreach (['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'] as $file) {
+        if (file_exists("$projectDir/$file")) {
+            $composeFile = "$projectDir/$file";
+            break;
+        }
+    }
+
+    if ($composeFile === null) {
+        return null;
+    }
+
+    preg_match('/^\s*image:\s*[\'"]?(sail-[^\'"\s]+)/m', (string) file_get_contents($composeFile), $matches);
+
+    return [
+        'image' => $matches[1] ?? '',
+        'network' => composeProjectName($projectDir) . '_sail',
+    ];
+}
+
+// Mirrors Docker Compose's own default: COMPOSE_PROJECT_NAME from .env, else
+// the directory name, lowercased with anything outside [a-z0-9_-] dropped.
+function composeProjectName(string $projectDir): string
+{
+    $env = file_exists("$projectDir/.env") ? (string) file_get_contents("$projectDir/.env") : '';
+    $name = preg_match('/^COMPOSE_PROJECT_NAME=[\'"]?([^\'"\r\n]*)/m', $env, $matches) === 1 && trim($matches[1]) !== ''
+        ? trim($matches[1])
+        : basename($projectDir);
+
+    return ltrim((string) preg_replace('/[^a-z0-9_-]/', '', strtolower($name)), '_-');
 }
 
 function sanitizeComposeProjectBase(string $base): string

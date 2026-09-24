@@ -51,9 +51,9 @@ SCRIPT
 
     run grep -- "-e DB_PASSWORD=secret" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
-    run grep -- "exec -T app php artisan migrate --no-interaction" "$DOCKER_LOG"
+    run grep -- "-T app php artisan migrate --no-interaction" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
-    run grep -- "exec -T app php artisan db:seed --no-interaction" "$DOCKER_LOG"
+    run grep -- "-T app php artisan db:seed --no-interaction" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -101,7 +101,7 @@ ENV
 
     run grep -- "artisan migrate" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
-    run grep -- "exec -T app php bin/seed --demo" "$DOCKER_LOG"
+    run grep -- "-T app php bin/seed --demo" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -249,6 +249,6 @@ SCRIPT
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
     [[ "$output" != *"Could not create the test database"* ]]
-    run grep -- "exec -T app php artisan db:seed --no-interaction" "$DOCKER_LOG"
+    run grep -- "-T app php artisan db:seed --no-interaction" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }

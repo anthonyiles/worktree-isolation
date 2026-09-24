@@ -28,10 +28,19 @@ load_worktree_config() {
 
     # docker-compose driver settings
     COMPOSE_SERVICE="${WORKTREE_COMPOSE_SERVICE:-app}"
+
+    # Containers run as the host user so files they write into the worktree
+    # (vendor/, node_modules/, storage/) stay owned by it. That UID may have no
+    # passwd entry in the image, hence a HOME that's always writable.
+    CONTAINER_USER_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp)
+}
+
+in_main_checkout() {
+    [[ "$(git rev-parse --path-format=absolute --git-dir)" == "$(git rev-parse --path-format=absolute --git-common-dir)" ]]
 }
 
 require_worktree() {
-    if [[ "$(git rev-parse --path-format=absolute --git-dir)" == "$(git rev-parse --path-format=absolute --git-common-dir)" ]]; then
+    if in_main_checkout; then
         echo "Error: this is the main checkout, not a git worktree. Run this from inside a worktree." >&2
         exit 1
     fi
@@ -46,17 +55,24 @@ validate_runtime() {
                 echo "Error: 'docker compose' not found. Install Docker with the Compose plugin." >&2
                 exit 1
             fi
-            local base="${WORKTREE_COMPOSE_PROJECT_BASE:-}"
-            if [[ -z "$base" ]]; then
-                # Configs written before install recorded this: fall back to
-                # what install derives, the main checkout's directory name.
-                base="$(slugify "$(basename "$(main_checkout_dir)")")"
+            COMPOSE_ARGS=(docker compose)
+            # The main checkout's stack runs under Compose's default project name.
+            if ! in_main_checkout; then
+                local base="${WORKTREE_COMPOSE_PROJECT_BASE:-}"
+                if [[ -z "$base" ]]; then
+                    # Configs written before install recorded this: fall back to
+                    # what install derives, the main checkout's directory name.
+                    base="$(slugify "$(basename "$(main_checkout_dir)")")"
+                fi
+                COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$base" "$WORKTREE_BASENAME")"
+                COMPOSE_ARGS+=(-p "$COMPOSE_PROJECT_NAME")
             fi
-            COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$base" "$WORKTREE_BASENAME")"
-            COMPOSE_ARGS=(docker compose -p "$COMPOSE_PROJECT_NAME")
             if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
                 COMPOSE_ARGS+=(-f "$WORKTREE_COMPOSE_FILE")
             fi
+            COMPOSE_EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec "${CONTAINER_USER_ARGS[@]}")
+            # Sail's compose file builds and serves as these, as vendor/bin/sail sets them.
+            export WWWUSER="${WWWUSER:-$(id -u)}" WWWGROUP="${WWWGROUP:-$(id -g)}"
             ;;
         docker-image)
             if [[ -z "$IMAGE" ]]; then
@@ -164,6 +180,7 @@ parse_ensure_db_output() {
 build_docker_image_args() {
     DOCKER_ARGS=(
         docker run --rm
+        "${CONTAINER_USER_ARGS[@]}"
         -v "$PROJECT_ROOT:$WORKDIR"
         -w "$WORKDIR"
     )
@@ -183,9 +200,10 @@ append_testing_env_args() {
         "$DB_PER_WORKTREE_KEY"
     )
 
-    local EXTRA_VARS
+    local EXTRA_VARS=()
     IFS=' ' read -ra EXTRA_VARS <<< "${WORKTREE_EXTRA_ENV_VARS:-}"
-    local ENV_VARS=("${DEFAULT_ENV_VARS[@]}" "${EXTRA_VARS[@]}")
+    # Bash < 4.4 (macOS's /bin/bash) treats "${EMPTY[@]}" as unbound under set -u.
+    local ENV_VARS=("${DEFAULT_ENV_VARS[@]}" ${EXTRA_VARS[@]+"${EXTRA_VARS[@]}"})
 
     for var in "${ENV_VARS[@]}"; do
         if [[ -n "${!var:-}" ]]; then
@@ -202,7 +220,7 @@ run_in_runtime() {
             cmd=(env)
             ;;
         docker-compose)
-            cmd=("${COMPOSE_ARGS[@]}" exec -T)
+            cmd=("${COMPOSE_EXEC_ARGS[@]}" -T)
             ;;
         docker-image)
             build_docker_image_args

@@ -10,7 +10,7 @@ use Symfony\Component\Process\Process;
 class InstallCommand extends Command
 {
     protected $signature = 'worktree:install
-        {--runtime=native : Runtime driver: native, docker-compose, or docker-image}
+        {--runtime= : Runtime driver: native, docker-compose, or docker-image (default: docker-image when Laravel Sail is detected, else native)}
         {--docker-image= : Docker image name (docker-image runtime)}
         {--docker-network= : Docker network name (docker-image runtime)}
         {--compose-service=app : Docker Compose service name (docker-compose runtime)}
@@ -28,8 +28,11 @@ class InstallCommand extends Command
             dirname(__DIR__, 2).'/stubs/bin/worktree-install',
             '--project-dir='.base_path(),
             '--stubs-dir='.dirname(__DIR__, 2).'/stubs',
-            '--runtime='.$this->option('runtime'),
         ];
+
+        if ($this->option('runtime')) {
+            $args[] = '--runtime='.$this->option('runtime');
+        }
 
         if ($this->option('docker-image')) {
             $args[] = '--docker-image='.$this->option('docker-image');

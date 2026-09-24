@@ -70,7 +70,24 @@ case "$COMMAND" in
         exec bash "$SCRIPT_DIR/test" "$@"
         ;;
     clean)
-        exec php "$SCRIPT_DIR/worktree-clean" "$@"
+        # DB_HOST is often a Compose service name (e.g. "mysql") that only
+        # resolves inside the Docker runtime, so clean runs there too.
+        if git rev-parse --show-toplevel > /dev/null 2>&1; then
+            # shellcheck disable=SC1091
+            source "$SCRIPT_DIR/_worktree-lib.sh"
+            load_worktree_config
+        fi
+        if [[ "${RUNTIME:-native}" == native ]]; then
+            exec php "$SCRIPT_DIR/worktree-clean" "$@"
+        fi
+        ROOT_REAL="$(cd -P "$PROJECT_ROOT" && pwd)"
+        if [[ "$SCRIPT_DIR" != "$ROOT_REAL"/* ]]; then
+            echo "Error: $SCRIPT_DIR is outside the project, so the $RUNTIME runtime can't run it." >&2
+            exit 1
+        fi
+        set -- "${SCRIPT_DIR#"$ROOT_REAL"/}/worktree-clean" "$@"
+        COMMAND=php
+        ALLOW_MAIN_CHECKOUT=true
         ;;
 esac
 
@@ -80,7 +97,7 @@ esac
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/_worktree-lib.sh"
 load_worktree_config
-require_worktree
+[[ "${ALLOW_MAIN_CHECKOUT:-}" == true ]] || require_worktree
 validate_runtime
 
 # .env.testing is deliberately not loaded: passthrough runs against the app's
@@ -95,7 +112,7 @@ case "$RUNTIME" in
         ;;
 
     docker-compose)
-        EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec)
+        EXEC_ARGS=("${COMPOSE_EXEC_ARGS[@]}")
         [[ "$IS_TTY" == true ]] || EXEC_ARGS+=(-T)
         exec "${EXEC_ARGS[@]}" "$COMPOSE_SERVICE" "$COMMAND" "$@"
         ;;

@@ -138,8 +138,14 @@ Sail is just Laravel's name for a pre-built Docker image, so it uses the `docker
 **1. Install**
 
 ```bash
+vendor/bin/worktree install
+# or: php artisan worktree:install
+```
+
+Run it on the host, not through `sail`. When `vendor/bin/sail` and a Compose file are present and no `--runtime` is given, install detects Sail and fills in the runtime, the image (the `sail-*` image in your Compose file) and the network (`<COMPOSE_PROJECT_NAME or directory name>_sail`). Override either with explicit options:
+
+```bash
 vendor/bin/worktree install --runtime=docker-image --docker-image="sail-8.5/app" --docker-network="myproject_sail"
-# or: php artisan worktree:install --runtime=docker-image --docker-image="sail-8.5/app" --docker-network="myproject_sail"
 ```
 
 - `--docker-image` — the image Sail already built (check with `docker images`, or see `vendor/bin/sail` config; typically `<project>-<php-version>/app`)
@@ -297,6 +303,8 @@ vendor/bin/worktree clean
 
 This lists all databases matching `{base}_wt_*` (test and development, with bases from the main repo's `.env.testing` and `.env`) and asks for confirmation before dropping them. The main checkout's own databases are never included. Use `--force` to skip the prompt.
 
+With a Docker runtime, `worktree clean` runs inside the container (the current worktree's stack, or the main checkout's own stack when run there), so a `DB_HOST` like `mysql` resolves just as it does for the app.
+
 ## Configuration
 
 ### Runtime Drivers
@@ -306,6 +314,8 @@ This lists all databases matching `{base}_wt_*` (test and development, with base
 | `native` (default) | Herd, Valet, any local PHP/Node | PHP, Composer, Node on host |
 | `docker-compose` | Docker Compose projects | Running `docker compose up -d` |
 | `docker-image` | Sail or standalone Docker image | Pre-built Docker image |
+
+Both Docker runtimes run commands as your host user (`-u $(id -u):$(id -g)`, with `HOME=/tmp` since that UID may not exist in the image), so `vendor/`, `node_modules/` and `storage/` in the worktree stay owned by you rather than root. For a Sail Compose stack, `worktree setup` also sets `WWWUSER`/`WWWGROUP` to your IDs (unless already set), as `vendor/bin/sail` does, so the app container serves as the same user.
 
 ### `.worktree-isolation.env` (full reference)
 
