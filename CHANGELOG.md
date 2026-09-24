@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/anthonyiles/worktree-isolation/compare/v1.2.0...v1.3.0) (2026-09-24)
+
+
+### Features
+
+* add worktree install --agents to write AI agent instructions ([446d60f](https://github.com/anthonyiles/worktree-isolation/commit/446d60f81648b04cbc79397b7ef1506805a51c31))
+
 ## [1.2.0](https://github.com/anthonyiles/worktree-isolation/compare/v1.1.0...v1.2.0) (2026-09-23)
 
 
