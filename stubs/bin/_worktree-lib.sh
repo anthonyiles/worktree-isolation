@@ -183,9 +183,10 @@ append_testing_env_args() {
         "$DB_PER_WORKTREE_KEY"
     )
 
-    local EXTRA_VARS
+    local EXTRA_VARS=()
     IFS=' ' read -ra EXTRA_VARS <<< "${WORKTREE_EXTRA_ENV_VARS:-}"
-    local ENV_VARS=("${DEFAULT_ENV_VARS[@]}" "${EXTRA_VARS[@]}")
+    # Bash < 4.4 (macOS's /bin/bash) treats "${EMPTY[@]}" as unbound under set -u.
+    local ENV_VARS=("${DEFAULT_ENV_VARS[@]}" ${EXTRA_VARS[@]+"${EXTRA_VARS[@]}"})
 
     for var in "${ENV_VARS[@]}"; do
         if [[ -n "${!var:-}" ]]; then
