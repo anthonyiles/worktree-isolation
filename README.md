@@ -362,6 +362,7 @@ This creates `config/worktree-isolation.php` which mirrors the `.worktree-isolat
 | Subcommand | Purpose |
 |---|---|
 | `vendor/bin/worktree install` | Install/configure worktree isolation (no framework needed) |
+| `vendor/bin/worktree install --agents` | Add worktree instructions for AI agents to AGENTS.md / CLAUDE.md |
 | `vendor/bin/worktree setup` | Bootstrap a worktree (env files, dependencies) — normally run automatically by the git hook |
 | `vendor/bin/worktree test` | Run tests with per-worktree database isolation |
 | `vendor/bin/worktree clean` | Drop per-worktree test and development databases (no framework needed) |
@@ -377,17 +378,19 @@ This creates `config/worktree-isolation.php` which mirrors the `.worktree-isolat
 
 For the `native` runtime, the per-worktree database is baked into `.env.testing` at bootstrap time (see [Per-Worktree Test Databases](#per-worktree-test-databases)), so an agent running `php artisan test` directly still hits the correct, isolated database.
 
-For `docker-compose` and `docker-image` (Sail) runtimes, that guarantee only holds if the agent goes through this package's commands. An agent that runs `sail artisan test`, `sail composer install`, or raw `docker compose exec` directly from a worktree can end up executing inside a container bind-mounted to a *different* checkout (see the warning in [Laravel Sail](#laravel-sail) above) — at that point it's reading the wrong worktree's `.env.testing` entirely, isolated database name or not. `vendor/bin/worktree` is the only command that guarantees the correct worktree, in every runtime, for any command — not just install and test. Add this to your project's cursor rules or AGENTS.md:
+For `docker-compose` and `docker-image` (Sail) runtimes, that guarantee only holds if the agent goes through this package's commands. An agent that runs `sail artisan test`, `sail composer install`, or raw `docker compose exec` directly from a worktree can end up executing inside a container bind-mounted to a *different* checkout (see the warning in [Laravel Sail](#laravel-sail) above) — at that point it's reading the wrong worktree's `.env.testing` entirely, isolated database name or not. `vendor/bin/worktree` is the only command that guarantees the correct worktree, in every runtime, for any command — not just install and test.
 
-```markdown
-**Worktrees:** If the working directory is a git worktree (`.git` is a file, not a directory),
-always run commands through `vendor/bin/worktree` — `vendor/bin/worktree test`,
-`vendor/bin/worktree setup`, `vendor/bin/worktree composer ...`, `vendor/bin/worktree npm ...`,
-`vendor/bin/worktree php artisan ...` — never call `sail`, `docker compose`, `composer`, `npm`,
-or `php artisan` directly. Those can silently execute inside another worktree's (or the main
-checkout's) container. `vendor/bin/worktree` handles runtime dispatch (native, Docker Compose,
-Sail) on top of the per-worktree database isolation already active in .env and .env.testing.
+To tell agents this, run the installer with `--agents`:
+
+```bash
+vendor/bin/worktree install --agents                      # AGENTS.md and/or CLAUDE.md, whichever exist (else AGENTS.md)
+vendor/bin/worktree install --agents=CLAUDE.md,AGENTS.md  # explicit files
+php artisan worktree:install --agents
 ```
+
+This adds a short instruction block to each file, wrapped in `<!-- worktree-isolation:start -->` / `<!-- worktree-isolation:end -->` markers, and leaves everything else in the file alone. Re-running it replaces the block in place, so run it again after upgrading the package to pick up changes. Commit the result. The block links agents to [docs/ai-agents.md](docs/ai-agents.md), the full guide shipped with the package (command substitutions, creating worktrees, recovering from a failed bootstrap).
+
+A `CLAUDE.md` that already imports `@AGENTS.md` is skipped, since Claude Code sees the block through the import. For any other Markdown instructions file your tools read, pass its path explicitly, e.g. `--agents=.github/copilot-instructions.md`.
 
 ## License
 

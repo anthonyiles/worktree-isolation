@@ -16,6 +16,8 @@ declare(strict_types=1);
  *   vendor/bin/worktree install --runtime=docker-compose --compose-service=app
  *   vendor/bin/worktree install --runtime=docker-image --docker-image=myapp --docker-network=mynet
  *   vendor/bin/worktree install --force
+ *   vendor/bin/worktree install --agents
+ *   vendor/bin/worktree install --agents=CLAUDE.md,AGENTS.md
  */
 
 $validRuntimes = ['native', 'docker-compose', 'docker-image'];
@@ -28,6 +30,7 @@ $opts = getopt('', [
     'compose-project-base:',
     'test-command:',
     'force',
+    'agents::',
     'project-dir:',
     'stubs-dir:',
     'help',
@@ -46,6 +49,9 @@ if (isset($opts['help'])) {
                                      default: derived from the project directory name)
       --test-command=CMD            Test command (default: php artisan test)
       --force                       Overwrite existing files
+      --agents[=FILES]              Add worktree instructions for AI agents to FILES
+                                     (comma-separated, default: whichever of AGENTS.md
+                                     and CLAUDE.md exist, else AGENTS.md)
       --project-dir=PATH            Project root (default: auto-detected)
       --stubs-dir=PATH              Stubs directory (default: auto-detected from package)
       --help                        Show this help
@@ -85,6 +91,11 @@ createEnvConfig($projectDir, $runtime, $opts, $force);
 
 // 3. Configure git hooks
 configureGitHooks($projectDir, $stubsDir);
+
+// 4. Optionally tell AI agents to go through vendor/bin/worktree
+if (array_key_exists('agents', $opts)) {
+    writeAgentInstructions($projectDir, $opts['agents'] === false ? null : (string) $opts['agents']);
+}
 
 echo "\nWorktree isolation installed and activated!\n\n";
 echo "What was done:\n";
@@ -267,4 +278,96 @@ function configureGitHooks(string $projectDir, string $stubsDir): void
         echo '    git config --local hook.worktree-setup.command ' . escapeshellarg($hookCommand) . "\n";
         echo "    git config --local --replace-all hook.worktree-setup.event post-checkout\n";
     }
+}
+
+function writeAgentInstructions(string $projectDir, ?string $files): void
+{
+    $targets = $files !== null
+        ? array_values(array_filter(array_map('trim', explode(',', $files))))
+        : defaultAgentFiles($projectDir);
+
+    foreach ($targets as $file) {
+        upsertAgentBlock($projectDir, $file);
+    }
+
+    if ($files === null && $targets === ['AGENTS.md'] && ! file_exists("$projectDir/CLAUDE.md")) {
+        echo "  Tip: Claude Code reads CLAUDE.md, not AGENTS.md. Add a CLAUDE.md containing\n";
+        echo "       @AGENTS.md, or re-run with --agents=AGENTS.md,CLAUDE.md\n";
+    }
+}
+
+function defaultAgentFiles(string $projectDir): array
+{
+    $existing = array_values(array_filter(
+        ['AGENTS.md', 'CLAUDE.md'],
+        fn (string $file) => file_exists("$projectDir/$file")
+    ));
+
+    if ($existing === []) {
+        return ['AGENTS.md'];
+    }
+
+    // A CLAUDE.md that imports AGENTS.md already gets the block through it.
+    if (count($existing) === 2 && str_contains((string) file_get_contents("$projectDir/CLAUDE.md"), '@AGENTS.md')) {
+        return ['AGENTS.md'];
+    }
+
+    return $existing;
+}
+
+function upsertAgentBlock(string $projectDir, string $file): void
+{
+    $start = '<!-- worktree-isolation:start -->';
+    $end = '<!-- worktree-isolation:end -->';
+    $block = $start . "\n" . agentInstructions() . $end;
+
+    $path = "$projectDir/$file";
+    $existing = file_exists($path) ? (string) file_get_contents($path) : null;
+
+    if ($existing === null) {
+        if (! is_dir(dirname($path))) {
+            mkdir(dirname($path), 0777, true);
+        }
+        file_put_contents($path, $block . "\n");
+        echo "  Created: $file (AI agent instructions)\n";
+        return;
+    }
+
+    $pattern = '/' . preg_quote($start, '/') . '.*?' . preg_quote($end, '/') . '/s';
+
+    if (preg_match($pattern, $existing) === 1) {
+        $updated = preg_replace_callback($pattern, fn () => $block, $existing, 1);
+        if ($updated === $existing) {
+            echo "  Unchanged: $file (AI agent instructions already current)\n";
+            return;
+        }
+        file_put_contents($path, $updated);
+        echo "  Updated: $file (AI agent instructions)\n";
+        return;
+    }
+
+    $separator = $existing === '' ? '' : (str_ends_with($existing, "\n") ? "\n" : "\n\n");
+    file_put_contents($path, $existing . $separator . $block . "\n");
+    echo "  Added: AI agent instructions to $file\n";
+}
+
+function agentInstructions(): string
+{
+    return <<<'MD'
+    ## Git worktrees
+
+    Each git worktree of this project gets its own dependencies, env files and databases.
+    Inside a worktree (`.git` is a file, not a directory), run every command through
+    `vendor/bin/worktree`:
+
+    - `vendor/bin/worktree test`, not `php artisan test`, `sail test` or `phpunit`
+    - `vendor/bin/worktree composer install`, `vendor/bin/worktree npm run build`
+    - `vendor/bin/worktree php artisan migrate`
+
+    Never call `sail`, `docker compose`, `composer`, `npm` or `php artisan` directly in a
+    worktree: they can run in another checkout's container against its database. In the
+    main checkout, run commands as usual. Full guide:
+    `vendor/anthonyiles/worktree-isolation/docs/ai-agents.md`
+
+    MD;
 }

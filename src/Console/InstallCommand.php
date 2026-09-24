@@ -16,7 +16,8 @@ class InstallCommand extends Command
         {--compose-service=app : Docker Compose service name (docker-compose runtime)}
         {--compose-project-base= : Docker Compose project base name (docker-compose runtime, default: derived from the project directory name)}
         {--test-command= : Test runner command (default: php artisan test)}
-        {--force : Overwrite existing files}';
+        {--force : Overwrite existing files}
+        {--agents= : Add worktree instructions for AI agents (comma-separated files, default: existing AGENTS.md/CLAUDE.md, else AGENTS.md)}';
 
     protected $description = 'Install worktree isolation scripts, configuration, and git hooks';
 
@@ -52,6 +53,12 @@ class InstallCommand extends Command
 
         if ($this->option('force')) {
             $args[] = '--force';
+        }
+
+        if ($this->option('agents')) {
+            $args[] = '--agents='.$this->option('agents');
+        } elseif ($this->input->hasParameterOption('--agents')) {
+            $args[] = '--agents';
         }
 
         $process = new Process($args, base_path());
