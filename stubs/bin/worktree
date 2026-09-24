@@ -95,7 +95,7 @@ case "$RUNTIME" in
         ;;
 
     docker-compose)
-        EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec)
+        EXEC_ARGS=("${COMPOSE_EXEC_ARGS[@]}")
         [[ "$IS_TTY" == true ]] || EXEC_ARGS+=(-T)
         exec "${EXEC_ARGS[@]}" "$COMPOSE_SERVICE" "$COMMAND" "$@"
         ;;

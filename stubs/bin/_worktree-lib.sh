@@ -28,6 +28,11 @@ load_worktree_config() {
 
     # docker-compose driver settings
     COMPOSE_SERVICE="${WORKTREE_COMPOSE_SERVICE:-app}"
+
+    # Containers run as the host user so files they write into the worktree
+    # (vendor/, node_modules/, storage/) stay owned by it. That UID may have no
+    # passwd entry in the image, hence a HOME that's always writable.
+    CONTAINER_USER_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp)
 }
 
 require_worktree() {
@@ -57,6 +62,9 @@ validate_runtime() {
             if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
                 COMPOSE_ARGS+=(-f "$WORKTREE_COMPOSE_FILE")
             fi
+            COMPOSE_EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec "${CONTAINER_USER_ARGS[@]}")
+            # Sail's compose file builds and serves as these, as vendor/bin/sail sets them.
+            export WWWUSER="${WWWUSER:-$(id -u)}" WWWGROUP="${WWWGROUP:-$(id -g)}"
             ;;
         docker-image)
             if [[ -z "$IMAGE" ]]; then
@@ -164,6 +172,7 @@ parse_ensure_db_output() {
 build_docker_image_args() {
     DOCKER_ARGS=(
         docker run --rm
+        "${CONTAINER_USER_ARGS[@]}"
         -v "$PROJECT_ROOT:$WORKDIR"
         -w "$WORKDIR"
     )
@@ -203,7 +212,7 @@ run_in_runtime() {
             cmd=(env)
             ;;
         docker-compose)
-            cmd=("${COMPOSE_ARGS[@]}" exec -T)
+            cmd=("${COMPOSE_EXEC_ARGS[@]}" -T)
             ;;
         docker-image)
             build_docker_image_args

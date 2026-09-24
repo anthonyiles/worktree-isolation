@@ -42,3 +42,13 @@ ENV
     [[ "$output" == *"-e APP_ENV=testing"* ]]
     [[ "$output" == *"-e DB_DATABASE=testing"* ]]
 }
+
+@test "passthrough and test run as the host user so the worktree's files stay owned by it" {
+    run bash "$STUBS_DIR/worktree" composer install
+    [ "$status" -eq 0 ]
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 0 ]
+
+    run grep -c -- "run --rm -u $(id -u):$(id -g) -e HOME=/tmp " "$DOCKER_LOG"
+    [ "$output" -eq 2 ]
+}

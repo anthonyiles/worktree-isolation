@@ -313,6 +313,8 @@ This lists all databases matching `{base}_wt_*` (test and development, with base
 | `docker-compose` | Docker Compose projects | Running `docker compose up -d` |
 | `docker-image` | Sail or standalone Docker image | Pre-built Docker image |
 
+Both Docker runtimes run commands as your host user (`-u $(id -u):$(id -g)`, with `HOME=/tmp` since that UID may not exist in the image), so `vendor/`, `node_modules/` and `storage/` in the worktree stay owned by you rather than root. For a Sail Compose stack, `worktree setup` also sets `WWWUSER`/`WWWGROUP` to your IDs (unless already set), as `vendor/bin/sail` does, so the app container serves as the same user.
+
 ### `.worktree-isolation.env` (full reference)
 
 Project-level configuration (committed to repo). The scenario sections above show the subset of these that matter for each runtime — this is the complete list:
