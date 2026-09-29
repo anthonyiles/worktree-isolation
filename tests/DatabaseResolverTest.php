@@ -35,11 +35,30 @@ class DatabaseResolverTest extends TestCase
         $this->assertSame('myapp_wt_renamed', DevDatabaseResolver::derive('myapp_wt_feature-auth', 'renamed'));
     }
 
-    public function test_dev_database_rejects_overlong_names(): void
+    public function test_overlong_worktree_names_are_truncated_with_a_hash(): void
+    {
+        $dev = DevDatabaseResolver::derive('myapp', str_repeat('a', 64));
+        $test = TestDatabaseResolver::derive('testing', str_repeat('a', 19).'-'.str_repeat('b', 12));
+
+        $this->assertSame('myapp_wt_'.str_repeat('a', 46).'-0098ba82', $dev);
+        $this->assertSame(DevDatabaseResolver::MAX_DERIVED_LENGTH, strlen($dev));
+        $this->assertSame('testing_wt_'.str_repeat('a', 19).'-'.substr(sha1(str_repeat('a', 19).'-'.str_repeat('b', 12)), 0, 8), $test);
+        $this->assertSame($test, TestDatabaseResolver::derive($test, str_repeat('a', 19).'-'.str_repeat('b', 12)));
+    }
+
+    public function test_truncated_names_stay_distinct(): void
+    {
+        $this->assertNotSame(
+            TestDatabaseResolver::derive('testing', 'feature-very-long-branch-name-one'),
+            TestDatabaseResolver::derive('testing', 'feature-very-long-branch-name-two'),
+        );
+    }
+
+    public function test_dev_database_rejects_a_base_too_long_to_fit(): void
     {
         $this->expectException(InvalidArgumentException::class);
 
-        DevDatabaseResolver::derive('myapp', str_repeat('a', 64));
+        DevDatabaseResolver::derive(str_repeat('a', 60), 'feature');
     }
 
     public function test_test_database_requires_test_in_the_base_not_the_worktree_name(): void

@@ -43,11 +43,18 @@ setup() {
     [ "$output" = "myapp_wt_renamed" ]
 }
 
-@test "rejects an empty base or an overlong development database name" {
+@test "rejects an empty base or one too long to fit a worktree suffix" {
     run derive_dev_database_name "" "feature"
     [ "$status" -eq 1 ]
-    run derive_dev_database_name "myapp" "$(printf 'a%.0s' {1..64})"
+    run derive_dev_database_name "$(printf 'a%.0s' {1..60})" "feature"
     [ "$status" -eq 1 ]
+}
+
+@test "truncates an overlong development database name with a hash like DevDatabaseResolver" {
+    run derive_dev_database_name "myapp" "$(printf 'a%.0s' {1..64})"
+    [ "$status" -eq 0 ]
+    [ "$output" = "myapp_wt_$(printf 'a%.0s' {1..46})-0098ba82" ]
+    [ "${#output}" -eq 64 ]
 }
 
 @test "derives a test database name that must mention test and fit in 40 characters" {
@@ -56,7 +63,13 @@ setup() {
     run derive_test_database_name "myapp" "feature"
     [ "$status" -eq 1 ]
     run derive_test_database_name "testing" "$(printf 'a%.0s' {1..30})"
-    [ "$status" -eq 1 ]
+    [ "$output" = "testing_wt_$(printf 'a%.0s' {1..20})-cd762363" ]
+    [ "${#output}" -eq 40 ]
+}
+
+@test "drops a trailing hyphen left by truncation" {
+    run derive_test_database_name "testing" "$(printf 'a%.0s' {1..19})-bbbbbbbbbbbb"
+    [[ "$output" =~ ^testing_wt_a{19}-[0-9a-f]{8}$ ]]
 }
 
 @test "does not let the worktree name satisfy the test database check" {

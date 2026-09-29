@@ -12,6 +12,8 @@ class TestDatabaseResolver
 {
     const int MAX_DERIVED_LENGTH = 40;
 
+    const int HASH_LENGTH = 8;
+
     /**
      * Derive a per-worktree test database name: "{base}_wt_{worktree}".
      *
@@ -36,15 +38,33 @@ class TestDatabaseResolver
             );
         }
 
-        $derived = $base.DevDatabaseResolver::MARKER.self::worktreeSuffix($worktreeBasename);
+        return self::fit($base, self::worktreeSuffix($worktreeBasename), self::MAX_DERIVED_LENGTH);
+    }
 
-        if (strlen($derived) > self::MAX_DERIVED_LENGTH) {
+    /**
+     * Join base and suffix, truncating an overlong suffix and appending a hash
+     * of the full suffix so long worktree names sharing a prefix stay distinct.
+     *
+     * @throws InvalidArgumentException
+     */
+    public static function fit(string $base, string $suffix, int $maxLength): string
+    {
+        $derived = $base.DevDatabaseResolver::MARKER.$suffix;
+
+        if (strlen($derived) <= $maxLength) {
+            return $derived;
+        }
+
+        $hash = substr(sha1($suffix), 0, self::HASH_LENGTH);
+        $room = $maxLength - strlen($base.DevDatabaseResolver::MARKER) - strlen($hash) - 1;
+
+        if ($room < 1) {
             throw new InvalidArgumentException(
-                "Derived database name \"$derived\" exceeds the maximum length of ".self::MAX_DERIVED_LENGTH.' characters. Shorten your worktree directory name.'
+                "Database name \"$base\" is too long to derive a per-worktree name within $maxLength characters."
             );
         }
 
-        return $derived;
+        return $base.DevDatabaseResolver::MARKER.rtrim(substr($suffix, 0, $room), '-').'-'.$hash;
     }
 
     public static function worktreeSuffix(string $worktreeBasename): string
