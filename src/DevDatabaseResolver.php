@@ -27,15 +27,7 @@ class DevDatabaseResolver
             throw new InvalidArgumentException('Cannot derive a per-worktree database name from an empty DB_DATABASE.');
         }
 
-        $derived = $base.self::MARKER.TestDatabaseResolver::worktreeSuffix($worktreeBasename);
-
-        if (strlen($derived) > self::MAX_DERIVED_LENGTH) {
-            throw new InvalidArgumentException(
-                "Derived database name \"$derived\" exceeds the maximum length of ".self::MAX_DERIVED_LENGTH.' characters. Shorten your worktree directory name.'
-            );
-        }
-
-        return $derived;
+        return TestDatabaseResolver::fit($base, TestDatabaseResolver::worktreeSuffix($worktreeBasename), self::MAX_DERIVED_LENGTH);
     }
 
     public static function ensureExists(string $name, string $host, int $port, string $user, string $password): bool

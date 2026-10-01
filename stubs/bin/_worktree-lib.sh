@@ -124,15 +124,31 @@ derive_compose_project_name() {
     echo "$1-$(slugify "$2")"
 }
 
+sha1_hex() {
+    if command -v sha1sum >/dev/null 2>&1; then
+        printf '%s' "$1" | sha1sum | cut -d' ' -f1
+    else
+        printf '%s' "$1" | shasum -a 1 | cut -d' ' -f1
+    fi
+}
+
 # Must match DevDatabaseResolver::derive() and TestDatabaseResolver::derive().
 # Setup writes these names before the stack starts, so they can't wait for
-# PHP inside the runtime.
+# PHP inside the runtime. An overlong suffix is truncated and tagged with a
+# hash of the full suffix, as in TestDatabaseResolver::fit().
 derive_worktree_database_name() {
-    local base="${1%%_wt_*}" derived
+    local base="${1%%_wt_*}" suffix hash room
     [[ -n "$base" ]] || return 1
-    derived="${base}_wt_$(slugify "$2")"
-    (( ${#derived} <= $3 )) || return 1
-    echo "$derived"
+    suffix="$(slugify "$2")"
+    if (( ${#base} + 4 + ${#suffix} > $3 )); then
+        hash="$(sha1_hex "$suffix")"
+        hash="${hash:0:8}"
+        room=$(( $3 - ${#base} - 4 - ${#hash} - 1 ))
+        (( room >= 1 )) || return 1
+        suffix="${suffix:0:room}"
+        suffix="${suffix%-}-${hash}"
+    fi
+    echo "${base}_wt_${suffix}"
 }
 
 derive_dev_database_name() {
