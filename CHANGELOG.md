@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.1](https://github.com/anthonyiles/worktree-isolation/compare/v1.4.0...v1.4.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* truncate overlong per-worktree database names instead of failing ([5751e6a](https://github.com/anthonyiles/worktree-isolation/commit/5751e6ac7844a351b44d70e63c8a067d6a717180))
+* truncate overlong per-worktree database names instead of failing ([0fdc018](https://github.com/anthonyiles/worktree-isolation/commit/0fdc018e9dca702a7cb1d5ba5bed1861dba13d69))
+
 ## [1.4.0](https://github.com/anthonyiles/worktree-isolation/compare/v1.3.0...v1.4.0) (2026-09-24)
 
 
