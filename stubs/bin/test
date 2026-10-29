@@ -64,6 +64,7 @@ fi
 # ---------------------------------------------------------------------------
 # Runs inside the target runtime. With ENSURE_DB_PHP set, it first derives and
 # creates this worktree's test database and points DB_DATABASE at it.
+# shellcheck disable=SC2016 # expanded by the inner shell
 RUN_TESTS='
     set -o pipefail
     if [[ -n "${ENSURE_DB_PHP:-}" ]]; then
