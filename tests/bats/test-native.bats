@@ -24,7 +24,7 @@ SCRIPT
 @test "hands the derived database to the test command, ignoring PHP notices" {
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
-    [ "${lines[-1]}" = "testing_wt_feature-auth" ]
+    [ "${lines[${#lines[@]}-1]}" = "testing_wt_feature-auth" ]
 }
 
 @test "does not pass the database name through a shared temp file" {
@@ -44,7 +44,7 @@ SCRIPT
     run bash "$STUBS_DIR/test"
     [ "$status" -ne 0 ]
     [[ "$output" == *"could not derive the per-worktree test database"* ]]
-    [ "${lines[-1]}" != "testing" ]
+    [ "${lines[${#lines[@]}-1]}" != "testing" ]
 }
 
 @test "refuses the main checkout's test database when per-worktree databases are off" {
@@ -62,7 +62,7 @@ SCRIPT
 
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
-    [ "${lines[-1]}" = "app-testing_wt_feature-auth" ]
+    [ "${lines[${#lines[@]}-1]}" = "app-testing_wt_feature-auth" ]
 }
 
 @test "refuses a test database name without \"test\" in it" {
