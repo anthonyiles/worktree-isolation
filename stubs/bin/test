@@ -77,7 +77,7 @@ RUN_TESTS='
 TEST_ENV=(-e "TEST_COMMAND=$TEST_COMMAND")
 MAIN_TEST_DB="$(main_test_database)"
 
-if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ && "${DB_CONNECTION:-}" =~ ^(mysql|mariadb)$ ]]; then
+if [[ "${TEST_DB_PER_WORKTREE:-}" =~ ^(true|1)$ && "${DB_CONNECTION:-}" =~ ^(mysql|mariadb)$ ]]; then
     # Derive from the main checkout's name, as setup does.
     base_db="${MAIN_TEST_DB:-${DB_DATABASE:-}}"
     if ! DB_DATABASE="$(derive_test_database_name "${base_db:-testing}" "$WORKTREE_BASENAME")"; then
@@ -95,7 +95,7 @@ if [[ "${!DB_PER_WORKTREE_KEY:-}" =~ ^(true|1)$ && "${DB_CONNECTION:-}" =~ ^(mys
     done
 elif [[ -n "$MAIN_TEST_DB" && "${DB_DATABASE:-}" == "$MAIN_TEST_DB" ]]; then
     echo "Error: $TESTING_ENV_FILE points at the main checkout's test database ($MAIN_TEST_DB)." >&2
-    echo "Set ${DB_PER_WORKTREE_KEY}=true in $TESTING_ENV_FILE, or run vendor/bin/worktree setup." >&2
+    echo "Set TEST_DB_PER_WORKTREE=true in $TESTING_ENV_FILE, or run vendor/bin/worktree setup." >&2
     exit 1
 fi
 

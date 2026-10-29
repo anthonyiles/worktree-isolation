@@ -141,19 +141,6 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Per-Worktree Database Flag
-    |--------------------------------------------------------------------------
-    |
-    | The environment variable name that enables per-worktree database isolation.
-    | When enabled, each worktree gets its own test database derived from the
-    | worktree directory name.
-    |
-    */
-
-    'db_per_worktree_env_key' => 'TEST_DB_PER_WORKTREE',
-
-    /*
-    |--------------------------------------------------------------------------
     | Base Test Database
     |--------------------------------------------------------------------------
     |

@@ -108,7 +108,7 @@ setup() {
     run bash -c '
         set -euo pipefail
         source "$1"
-        DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE TEST_ENV=() APP_ENV=testing
+        TEST_ENV=() APP_ENV=testing
         WORKTREE_EXTRA_ENV_VARS= append_testing_env_args
         echo "${TEST_ENV[*]}"
     ' _ "$BATS_TEST_DIRNAME/../../stubs/bin/_worktree-lib.sh"
@@ -117,7 +117,6 @@ setup() {
 }
 
 @test "append_testing_env_args passes WORKTREE_EXTRA_ENV_VARS through" {
-    DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
     TEST_ENV=()
     FOO=1 BAR=two WORKTREE_EXTRA_ENV_VARS="FOO BAR" append_testing_env_args
     [ "${TEST_ENV[*]}" = "-e FOO=1 -e BAR=two" ]
