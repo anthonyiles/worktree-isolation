@@ -27,7 +27,7 @@ SCRIPT
 }
 
 run_install() {
-    php "$STUBS_DIR/bin/worktree-install" \
+    bash "$STUBS_DIR/bin/worktree-install" \
         --project-dir="$PROJECT_DIR" --stubs-dir="$STUBS_DIR" "$@"
 }
 

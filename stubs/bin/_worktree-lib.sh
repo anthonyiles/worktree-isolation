@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Shared helpers sourced by stubs/bin/worktree, worktree-setup, and test.
+# Shared helpers sourced by stubs/bin/worktree, worktree-install,
+# worktree-setup, and test.
 
 # shellcheck disable=SC2034 # the variables are read by the sourcing scripts
 load_worktree_config() {
@@ -110,8 +111,8 @@ main_test_database() {
     echo "$name"
 }
 
-# Same sanitization as TestDatabaseResolver::worktreeSuffix() and
-# worktree-install's sanitizeComposeProjectBase(): lowercase, collapse
+# Same sanitization as TestDatabaseResolver::worktreeSuffix(), and what
+# worktree-install applies to the compose project base: lowercase, collapse
 # anything outside [a-z0-9] into a single hyphen, trim leading/trailing
 # hyphens.
 slugify() {

@@ -15,8 +15,8 @@ This package automates all of that. After installation, every `git worktree add`
 
 ## Requirements
 
-- PHP 8.2+
-- Git 2.54+ (for config-based hooks)
+- PHP 8.2+ wherever your app runs: on the host for the native runtime, inside the container for Docker Compose and Sail. Docker setups need no PHP on the host — `vendor/bin/worktree` itself is plain bash.
+- Bash and Git 2.54+ (for config-based hooks) on the host
 - MySQL or MariaDB (for per-worktree database isolation)
 
 ## Installation
@@ -26,6 +26,8 @@ Every scenario starts the same way:
 ```bash
 composer require anthonyiles/worktree-isolation --dev
 ```
+
+No PHP on the host? Run that through your container instead — e.g. `sail composer require anthonyiles/worktree-isolation --dev` — then run `vendor/bin/worktree install` on the host as below.
 
 This installs a single command, `vendor/bin/worktree`, kept in sync automatically by Composer. Nothing is copied into your project except the config file you choose to write (below). Laravel projects can swap `vendor/bin/worktree install` for `php artisan worktree:install` in any scenario below — same flags, `artisan` just delegates to the same installer.
 
@@ -142,7 +144,7 @@ vendor/bin/worktree install
 # or: php artisan worktree:install
 ```
 
-Run it on the host, not through `sail`. When `vendor/bin/sail` and a Compose file are present and no `--runtime` is given, install detects Sail and fills in the runtime, the image (the `sail-*` image in your Compose file) and the network (`<COMPOSE_PROJECT_NAME or directory name>_sail`). Override either with explicit options:
+Run it on the host, not through `sail` — it only needs bash and git there, not PHP. When `vendor/bin/sail` and a Compose file are present and no `--runtime` is given, install detects Sail and fills in the runtime, the image (the `sail-*` image in your Compose file) and the network (`<COMPOSE_PROJECT_NAME or directory name>_sail`). Override either with explicit options:
 
 ```bash
 vendor/bin/worktree install --runtime=docker-image --docker-image="sail-8.5/app" --docker-network="myproject_sail"

@@ -61,7 +61,7 @@ case "$COMMAND" in
         exit 0
         ;;
     install)
-        exec php "$SCRIPT_DIR/worktree-install" "$@"
+        exec bash "$SCRIPT_DIR/worktree-install" "$@"
         ;;
     setup)
         exec bash "$SCRIPT_DIR/worktree-setup" "$@"

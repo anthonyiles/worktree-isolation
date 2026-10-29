@@ -1,438 +1,462 @@
-#!/usr/bin/env php
-<?php
+#!/usr/bin/env bash
+#
+# Installer for worktree isolation. Invoked as `vendor/bin/worktree install`
+# (stubs/bin/worktree dispatches straight into this file); not itself
+# exposed as a Composer bin.
+#
+# Plain bash, so it runs on hosts without PHP (e.g. Sail projects).
+# Laravel projects can also use `php artisan worktree:install` which delegates here.
+#
+# Usage:
+#   vendor/bin/worktree install
+#   vendor/bin/worktree install --runtime=docker-compose --compose-service=app
+#   vendor/bin/worktree install --runtime=docker-image --docker-image=myapp --docker-network=mynet
+#   vendor/bin/worktree install --force
+#   vendor/bin/worktree install --agents
+#   vendor/bin/worktree install --agents=CLAUDE.md,AGENTS.md
+#
+set -euo pipefail
 
-declare(strict_types=1);
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/_worktree-lib.sh"
 
-/**
- * Installer for worktree isolation. Invoked as `vendor/bin/worktree install`
- * (stubs/bin/worktree dispatches straight into this file); not itself
- * exposed as a Composer bin.
- *
- * No framework dependencies — uses only PHP builtins.
- * Laravel projects can also use `php artisan worktree:install` which delegates here.
- *
- * Usage:
- *   vendor/bin/worktree install
- *   vendor/bin/worktree install --runtime=docker-compose --compose-service=app
- *   vendor/bin/worktree install --runtime=docker-image --docker-image=myapp --docker-network=mynet
- *   vendor/bin/worktree install --force
- *   vendor/bin/worktree install --agents
- *   vendor/bin/worktree install --agents=CLAUDE.md,AGENTS.md
- */
+VALID_RUNTIMES=(native docker-compose docker-image)
 
-$validRuntimes = ['native', 'docker-compose', 'docker-image'];
+usage() {
+    cat <<'HELP'
+Usage: vendor/bin/worktree install [OPTIONS]
 
-$opts = getopt('', [
-    'runtime:',
-    'docker-image:',
-    'docker-network:',
-    'compose-service:',
-    'compose-project-base:',
-    'test-command:',
-    'force',
-    'agents::',
-    'project-dir:',
-    'stubs-dir:',
-    'help',
-]);
-
-if (isset($opts['help'])) {
-    fwrite(STDOUT, <<<HELP
-    Usage: vendor/bin/worktree install [OPTIONS]
-
-    Options:
-      --runtime=DRIVER              Runtime driver: native, docker-compose, docker-image
-                                     (default: docker-image when Laravel Sail is detected,
-                                     else native)
-      --docker-image=NAME           Docker image name (docker-image runtime)
-      --docker-network=NAME         Docker network name (docker-image runtime)
-      --compose-service=NAME        Docker Compose service name (docker-compose runtime, default: app)
-      --compose-project-base=NAME   Docker Compose project base name (docker-compose runtime,
-                                     default: derived from the project directory name)
-      --test-command=CMD            Test command (default: php artisan test)
-      --force                       Overwrite existing files
-      --agents[=FILES]              Add worktree instructions for AI agents to FILES
-                                     (comma-separated, default: whichever of AGENTS.md
-                                     and CLAUDE.md exist, else AGENTS.md)
-      --project-dir=PATH            Project root (default: auto-detected)
-      --stubs-dir=PATH              Stubs directory (default: auto-detected from package)
-      --help                        Show this help
-
-    HELP);
-    exit(0);
+Options:
+  --runtime=DRIVER              Runtime driver: native, docker-compose, docker-image
+                                 (default: docker-image when Laravel Sail is detected,
+                                 else native)
+  --docker-image=NAME           Docker image name (docker-image runtime)
+  --docker-network=NAME         Docker network name (docker-image runtime)
+  --compose-service=NAME        Docker Compose service name (docker-compose runtime, default: app)
+  --compose-project-base=NAME   Docker Compose project base name (docker-compose runtime,
+                                 default: derived from the project directory name)
+  --test-command=CMD            Test command (default: php artisan test)
+  --force                       Overwrite existing files
+  --agents[=FILES]              Add worktree instructions for AI agents to FILES
+                                 (comma-separated, default: whichever of AGENTS.md
+                                 and CLAUDE.md exist, else AGENTS.md)
+  --project-dir=PATH            Project root (default: auto-detected)
+  --stubs-dir=PATH              Stubs directory (default: auto-detected from package)
+  --help                        Show this help
+HELP
 }
 
-$force = isset($opts['force']);
+# ---------------------------------------------------------------------------
+# Functions
+# ---------------------------------------------------------------------------
 
-if (isset($opts['runtime']) && ! in_array($opts['runtime'], $validRuntimes, true)) {
-    fwrite(STDERR, "Error: Invalid runtime '{$opts['runtime']}'. Use: " . implode(', ', $validRuntimes) . "\n");
-    exit(1);
+resolve_project_root() {
+    # This script runs from inside vendor/, not the project root —
+    # resolve via git instead.
+    git rev-parse --show-toplevel 2> /dev/null || pwd
 }
 
-// Inside Sail's container the project path and git differ from the host's,
-// so the hook path written to git config would be wrong.
-if (getenv('LARAVEL_SAIL') === '1') {
-    fwrite(STDERR, "Error: Run the installer on the host, not inside Sail\n");
-    fwrite(STDERR, "  (vendor/bin/worktree install or php artisan worktree:install, without sail).\n");
-    exit(1);
+find_stubs_dir() {
+    local dir
+    for dir in "$1/vendor/anthonyiles/worktree-isolation/stubs" "$SCRIPT_DIR/.."; do
+        if [[ -d "$dir" && -e "$dir/bin/test" ]]; then
+            (cd -P "$dir" && pwd)
+            return
+        fi
+    done
+    return 1
 }
 
-$projectDir = $opts['project-dir'] ?? resolveProjectRoot();
+# Sets SAIL_IMAGE and SAIL_NETWORK, or returns 1 when Sail isn't detected.
+detect_sail() {
+    local project_dir="$1" compose_file="" file
+    [[ -e "$project_dir/vendor/bin/sail" ]] || return 1
 
-$runtime = $opts['runtime'] ?? null;
-if ($runtime === null) {
-    $sail = detectSail($projectDir);
-    if ($sail !== null) {
-        $runtime = 'docker-image';
-        $opts += ['docker-image' => $sail['image'], 'docker-network' => $sail['network']];
-    } else {
-        $runtime = 'native';
-    }
-}
-$stubsDir = $opts['stubs-dir'] ?? findStubsDir($projectDir);
+    for file in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+        if [[ -e "$project_dir/$file" ]]; then
+            compose_file="$project_dir/$file"
+            break
+        fi
+    done
+    [[ -n "$compose_file" ]] || return 1
 
-if ($stubsDir === null) {
-    fwrite(STDERR, "Error: Could not locate package stubs directory.\n");
-    fwrite(STDERR, "  Pass --stubs-dir=/path/to/vendor/anthonyiles/worktree-isolation/stubs\n");
-    exit(1);
+    SAIL_IMAGE="$(grep -m 1 -E "^[[:space:]]*image:[[:space:]]*['\"]?sail-" "$compose_file" \
+        | sed -E "s/^[[:space:]]*image:[[:space:]]*['\"]?(sail-[^'\"[:space:]]+).*/\1/")" || SAIL_IMAGE=""
+    SAIL_NETWORK="$(compose_project_name "$project_dir")_sail"
 }
 
-echo "Installing worktree isolation...\n\n";
+# Mirrors Docker Compose's own default: COMPOSE_PROJECT_NAME from .env, else
+# the directory name, lowercased with anything outside [a-z0-9_-] dropped.
+compose_project_name() {
+    local name=""
+    if [[ -f "$1/.env" ]]; then
+        name="$(grep -E '^COMPOSE_PROJECT_NAME=' "$1/.env" | tail -n 1 | tr -d '\r' \
+            | sed -E "s/^COMPOSE_PROJECT_NAME=['\"]?//; s/['\"].*//; s/^[[:space:]]+//; s/[[:space:]]+$//")" || name=""
+    fi
+    [[ -n "$name" ]] || name="$(basename "$1")"
 
-if (isset($sail)) {
-    echo "  Detected Laravel Sail: using the docker-image runtime\n";
+    printf '%s' "$name" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -cd 'a-z0-9_-' | sed -E 's/^[_-]+//'
 }
 
-// 1. Verify git version
-if (! verifyGitVersion()) {
-    exit(1);
+verify_git_version() {
+    local output major minor
+    if ! output="$(git --version 2>&1)"; then
+        echo "Error: Could not determine git version. Is git installed?" >&2
+        return 1
+    fi
+
+    if [[ "${output%%$'\n'*}" =~ ([0-9]+)\.([0-9]+) ]]; then
+        major="${BASH_REMATCH[1]}"
+        minor="${BASH_REMATCH[2]}"
+    else
+        major=0
+        minor=0
+    fi
+
+    if (( 10#$major < 2 || (10#$major == 2 && 10#$minor < 54) )); then
+        echo "Error: Git 2.54+ is required for config-based hooks. You have Git $major.$minor." >&2
+        echo "  Upgrade with: brew upgrade git" >&2
+        return 1
+    fi
+
+    echo "  Git version: $major.$minor (OK)"
 }
 
-// 2. Create .worktree-isolation.env — the only file this installer writes
-// into the project. Everything else runs from vendor/ via vendor/bin/worktree
-// (the only Composer "bin"), which dispatches to the sibling scripts.
-createEnvConfig($projectDir, $runtime, $opts, $force);
+create_env_config() {
+    local env_file="$PROJECT_DIR/.worktree-isolation.env"
 
-// 3. Configure git hooks
-configureGitHooks($projectDir, $stubsDir);
+    if [[ -e "$env_file" && "$FORCE" != true ]]; then
+        echo "  Skipping: .worktree-isolation.env (already exists)"
+        return
+    fi
 
-// 4. Optionally tell AI agents to go through vendor/bin/worktree
-if (array_key_exists('agents', $opts)) {
-    writeAgentInstructions($projectDir, $opts['agents'] === false ? null : (string) $opts['agents']);
+    local lines=(
+        '# Worktree Isolation Configuration'
+        '# These values are used by vendor/bin/worktree setup and vendor/bin/worktree test'
+        ''
+        '# Runtime driver: native | docker-compose | docker-image'
+        "WORKTREE_RUNTIME=$RUNTIME_OPT"
+        ''
+        '# Test command (default: php artisan test)'
+    )
+
+    if [[ -n "${OPT_TEST_COMMAND:-}" ]]; then
+        lines+=("WORKTREE_TEST_COMMAND=$OPT_TEST_COMMAND")
+    else
+        lines+=('# WORKTREE_TEST_COMMAND=php vendor/bin/phpunit')
+    fi
+
+    if [[ "$RUNTIME_OPT" == docker-compose ]]; then
+        # slugify applies whether the base was auto-derived or passed via
+        # --compose-project-base, so an explicit value can never produce an
+        # invalid Compose project name.
+        lines+=(
+            ''
+            '# docker-compose runtime settings'
+            "WORKTREE_COMPOSE_SERVICE=${OPT_COMPOSE_SERVICE-app}"
+            '# WORKTREE_COMPOSE_FILE=docker-compose.yml'
+            "WORKTREE_COMPOSE_PROJECT_BASE=$(slugify "${OPT_COMPOSE_PROJECT_BASE-$(basename "$PROJECT_DIR")}")"
+        )
+    fi
+
+    if [[ "$RUNTIME_OPT" == docker-image ]]; then
+        local image="${OPT_DOCKER_IMAGE:-}" network="${OPT_DOCKER_NETWORK:-}"
+
+        if [[ -z "$image" ]]; then
+            echo "  Tip: Set WORKTREE_DOCKER_IMAGE in .worktree-isolation.env or pass --docker-image"
+        fi
+        if [[ -z "$network" ]]; then
+            echo "  Tip: Set WORKTREE_DOCKER_NETWORK in .worktree-isolation.env or pass --docker-network"
+        fi
+
+        lines+=(
+            ''
+            '# docker-image runtime settings'
+            "WORKTREE_DOCKER_IMAGE=$image"
+            "WORKTREE_DOCKER_NETWORK=$network"
+            '# WORKTREE_DOCKER_WORKDIR=/var/www/html'
+        )
+    fi
+
+    lines+=(
+        ''
+        '# Common settings'
+        'WORKTREE_TESTING_ENV_FILE=.env.testing'
+        'WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example'
+        'WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE'
+        ''
+        '# Additional env vars to pass to the test container (space-separated, docker-image only)'
+        '# WORKTREE_EXTRA_ENV_VARS='
+        ''
+        '# Per-worktree development database (MySQL/MariaDB)'
+        'WORKTREE_DEV_DB_PER_WORKTREE=true'
+        '# WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction'
+        '# WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction'
+    )
+
+    printf '%s\n' "${lines[@]}" > "$env_file"
+    echo "  Created: .worktree-isolation.env"
 }
 
-echo "\nWorktree isolation installed and activated!\n\n";
-echo "What was done:\n";
-echo "  - Created .worktree-isolation.env (runtime: $runtime)\n";
-echo "  - Configured git hook.worktree-setup.command/event (local, this clone only)\n";
-echo "    pointing at the vendor copy of the post-checkout hook\n\n";
-echo "Next steps:\n";
-echo "  1. Review .worktree-isolation.env and adjust if needed\n";
-echo "  2. Commit .worktree-isolation.env\n";
-echo "  3. Other engineers just need to run: vendor/bin/worktree install (or php artisan worktree:install for Laravel)\n";
-echo "     once per clone — this activates the hook locally and works for worktrees on any branch,\n";
-echo "     including branches that predate this package being added.\n\n";
-
-exit(0);
-
-// ---------------------------------------------------------------------------
-// Functions
-// ---------------------------------------------------------------------------
-
-function resolveProjectRoot(): string
-{
-    // This script runs from inside vendor/, not the project root —
-    // resolve via git instead.
-    $toplevel = trim((string) shell_exec('git rev-parse --show-toplevel 2>/dev/null'));
-
-    return $toplevel !== '' ? $toplevel : getcwd();
+# Single-quotes a value for the shell, the way PHP's escapeshellarg() does, so
+# configs written by the earlier PHP installer stay byte-identical.
+shell_quote() {
+    local escaped="'\\''"
+    printf "'%s'" "${1//\'/$escaped}"
 }
 
-function findStubsDir(string $projectDir): ?string
-{
-    $candidates = [
-        "$projectDir/vendor/anthonyiles/worktree-isolation/stubs",
-        dirname(__DIR__, 2) . '/stubs',
-        dirname(__DIR__) . '/stubs',
-    ];
+configure_git_hooks() {
+    # hook.*.command must be an absolute path: git resolves a relative one
+    # against the cwd of whatever worktree is running the hook (the new
+    # worktree, for post-checkout), not the main repo.
+    # Run through bash so it works even when Composer didn't keep the
+    # executable bit (zip dists without unzip).
+    local hook_command
+    hook_command="bash $(shell_quote "$STUBS_DIR/githooks/post-checkout-worktree-setup.sh")"
 
-    foreach ($candidates as $dir) {
-        if (is_dir($dir) && file_exists("$dir/bin/test")) {
-            return realpath($dir);
-        }
-    }
-
-    return null;
+    if (cd "$PROJECT_DIR" \
+        && git config --local hook.worktree-setup.command "$hook_command" \
+        && git config --local --replace-all hook.worktree-setup.event post-checkout) > /dev/null; then
+        echo "  Configured: hook.worktree-setup.command/event (local git config)"
+    else
+        echo "  Warning: Could not configure git hooks automatically."
+        echo "  Run manually:"
+        echo "    git config --local hook.worktree-setup.command $(shell_quote "$hook_command")"
+        echo "    git config --local --replace-all hook.worktree-setup.event post-checkout"
+    fi
 }
 
-/**
- * @return array{image: string, network: string}|null
- */
-function detectSail(string $projectDir): ?array
-{
-    if (! file_exists("$projectDir/vendor/bin/sail")) {
-        return null;
-    }
+# Usage: write_agent_instructions [FILES]  (no argument: pick the defaults)
+write_agent_instructions() {
+    local targets=() file
+    if [[ $# -gt 0 ]]; then
+        local listed=()
+        IFS=',' read -ra listed <<< "$1"
+        for file in ${listed[@]+"${listed[@]}"}; do
+            file="$(printf '%s' "$file" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+            [[ -n "$file" ]] && targets+=("$file")
+        done
+    else
+        default_agent_files
+    fi
 
-    $composeFile = null;
-    foreach (['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'] as $file) {
-        if (file_exists("$projectDir/$file")) {
-            $composeFile = "$projectDir/$file";
-            break;
-        }
-    }
+    for file in ${targets[@]+"${targets[@]}"}; do
+        upsert_agent_block "$file"
+    done
 
-    if ($composeFile === null) {
-        return null;
-    }
-
-    preg_match('/^\s*image:\s*[\'"]?(sail-[^\'"\s]+)/m', (string) file_get_contents($composeFile), $matches);
-
-    return [
-        'image' => $matches[1] ?? '',
-        'network' => composeProjectName($projectDir) . '_sail',
-    ];
+    if [[ $# -eq 0 && "${targets[*]}" == AGENTS.md && ! -e "$PROJECT_DIR/CLAUDE.md" ]]; then
+        echo "  Tip: Claude Code reads CLAUDE.md, not AGENTS.md. Add a CLAUDE.md containing"
+        echo "       @AGENTS.md, or re-run with --agents=AGENTS.md,CLAUDE.md"
+    fi
 }
 
-// Mirrors Docker Compose's own default: COMPOSE_PROJECT_NAME from .env, else
-// the directory name, lowercased with anything outside [a-z0-9_-] dropped.
-function composeProjectName(string $projectDir): string
-{
-    $env = file_exists("$projectDir/.env") ? (string) file_get_contents("$projectDir/.env") : '';
-    $name = preg_match('/^COMPOSE_PROJECT_NAME=[\'"]?([^\'"\r\n]*)/m', $env, $matches) === 1 && trim($matches[1]) !== ''
-        ? trim($matches[1])
-        : basename($projectDir);
+# Sets targets (declared by the caller).
+default_agent_files() {
+    local file
+    for file in AGENTS.md CLAUDE.md; do
+        [[ -e "$PROJECT_DIR/$file" ]] && targets+=("$file")
+    done
 
-    return ltrim((string) preg_replace('/[^a-z0-9_-]/', '', strtolower($name)), '_-');
+    if [[ ${#targets[@]} -eq 0 ]]; then
+        targets=(AGENTS.md)
+    # A CLAUDE.md that imports AGENTS.md already gets the block through it.
+    elif [[ ${#targets[@]} -eq 2 ]] && grep -qF '@AGENTS.md' "$PROJECT_DIR/CLAUDE.md"; then
+        targets=(AGENTS.md)
+    fi
 }
 
-function sanitizeComposeProjectBase(string $base): string
-{
-    // Same sanitization pattern as TestDatabaseResolver::derive() and the
-    // bash-side derive_compose_project_name(): lowercase, collapse anything
-    // outside [a-z0-9] into a single hyphen, trim leading/trailing hyphens.
-    // Applied whether $base was auto-derived or passed via --compose-project-base,
-    // so an explicit value can never produce an invalid Compose project name.
-    $base = strtolower($base);
-    $base = preg_replace('/[^a-z0-9]+/', '-', $base) ?? '';
-    $base = trim($base, '-');
+upsert_agent_block() {
+    local file="$1"
+    local path="$PROJECT_DIR/$file"
+    local start='<!-- worktree-isolation:start -->'
+    local end='<!-- worktree-isolation:end -->'
+    local block
+    block="$start"$'\n'"$(agent_instructions)"$'\n'"$end"
 
-    return $base !== '' ? $base : 'worktree';
+    if [[ ! -e "$path" ]]; then
+        mkdir -p "$(dirname "$path")"
+        printf '%s\n' "$block" > "$path"
+        echo "  Created: $file (AI agent instructions)"
+        return
+    fi
+
+    # The trailing x keeps $(...) from stripping the file's final newlines.
+    local existing
+    existing="$(cat "$path"; printf x)"
+    existing="${existing%x}"
+
+    # Replace the first start marker through the first end marker after it.
+    if [[ "$existing" == *"$start"* ]]; then
+        local before="${existing%%"$start"*}" rest="${existing#*"$start"}"
+        if [[ "$rest" == *"$end"* ]]; then
+            local updated="$before$block${rest#*"$end"}"
+            if [[ "$updated" == "$existing" ]]; then
+                echo "  Unchanged: $file (AI agent instructions already current)"
+                return
+            fi
+            printf '%s' "$updated" > "$path"
+            echo "  Updated: $file (AI agent instructions)"
+            return
+        fi
+    fi
+
+    local separator=""
+    if [[ -n "$existing" ]]; then
+        if [[ "$existing" == *$'\n' ]]; then
+            separator=$'\n'
+        else
+            separator=$'\n\n'
+        fi
+    fi
+    printf '%s\n' "$existing$separator$block" > "$path"
+    echo "  Added: AI agent instructions to $file"
 }
 
-function verifyGitVersion(): bool
-{
-    exec('git --version 2>&1', $output, $exitCode);
+agent_instructions() {
+    cat <<'MD'
+## Git worktrees
 
-    if ($exitCode !== 0) {
-        fwrite(STDERR, "Error: Could not determine git version. Is git installed?\n");
-        return false;
-    }
+Each git worktree of this project gets its own dependencies, env files and databases.
+Inside a worktree (`.git` is a file, not a directory), run every command through
+`vendor/bin/worktree`:
 
-    preg_match('/(\d+\.\d+)/', $output[0] ?? '', $matches);
-    $version = $matches[1] ?? '0.0';
+- `vendor/bin/worktree test`, not `php artisan test`, `sail test` or `phpunit`
+- `vendor/bin/worktree composer install`, `vendor/bin/worktree npm run build`
+- `vendor/bin/worktree php artisan migrate`
 
-    if (version_compare($version, '2.54', '<')) {
-        fwrite(STDERR, "Error: Git 2.54+ is required for config-based hooks. You have Git $version.\n");
-        fwrite(STDERR, "  Upgrade with: brew upgrade git\n");
-        return false;
-    }
-
-    echo "  Git version: $version (OK)\n";
-    return true;
+Never call `sail`, `docker compose`, `composer`, `npm` or `php artisan` directly in a
+worktree: they can run in another checkout's container against its database. In the
+main checkout, run commands as usual. Full guide:
+`vendor/anthonyiles/worktree-isolation/docs/ai-agents.md`
+MD
 }
 
-function createEnvConfig(string $projectDir, string $runtime, array $opts, bool $force): void
-{
-    $envFile = "$projectDir/.worktree-isolation.env";
+# ---------------------------------------------------------------------------
+# Options
+# ---------------------------------------------------------------------------
+# Unset means "not passed". An empty value (e.g. --docker-image=) counts as
+# not passed too, so defaults and Sail detection still apply.
+FORCE=false
+AGENTS=false
 
-    if (file_exists($envFile) && ! $force) {
-        echo "  Skipping: .worktree-isolation.env (already exists)\n";
-        return;
-    }
+while [[ $# -gt 0 ]]; do
+    arg="$1"
+    shift
+    case "$arg" in
+        --help)
+            usage
+            exit 0
+            ;;
+        --force)
+            FORCE=true
+            ;;
+        --agents)
+            AGENTS=true
+            ;;
+        --agents=*)
+            AGENTS=true
+            OPT_AGENTS="${arg#*=}"
+            ;;
+        --runtime|--runtime=*|--docker-image|--docker-image=*|--docker-network|--docker-network=*|\
+        --compose-service|--compose-service=*|--compose-project-base|--compose-project-base=*|\
+        --test-command|--test-command=*|--project-dir|--project-dir=*|--stubs-dir|--stubs-dir=*)
+            name="${arg%%=*}"
+            if [[ "$arg" == *=* ]]; then
+                value="${arg#*=}"
+            elif [[ $# -gt 0 ]]; then
+                value="$1"
+                shift
+            else
+                echo "Error: $name requires a value." >&2
+                exit 1
+            fi
+            # --compose-project-base -> OPT_COMPOSE_PROJECT_BASE
+            var="OPT_$(echo "${name#--}" | tr 'a-z-' 'A-Z_')"
+            [[ -z "$value" ]] || printf -v "$var" '%s' "$value"
+            ;;
+        *)
+            echo "Error: Unknown option '$arg'. Run 'vendor/bin/worktree install --help' for usage." >&2
+            exit 1
+            ;;
+    esac
+done
 
-    $testCommand = $opts['test-command'] ?? '';
+if [[ -n "${OPT_RUNTIME+x}" && " ${VALID_RUNTIMES[*]} " != *" $OPT_RUNTIME "* ]]; then
+    echo "Error: Invalid runtime '$OPT_RUNTIME'. Use: native, docker-compose, docker-image" >&2
+    exit 1
+fi
 
-    $lines = [
-        '# Worktree Isolation Configuration',
-        '# These values are used by vendor/bin/worktree setup and vendor/bin/worktree test',
-        '',
-        '# Runtime driver: native | docker-compose | docker-image',
-        "WORKTREE_RUNTIME=$runtime",
-    ];
+# Inside Sail's container the project path and git differ from the host's,
+# so the hook path written to git config would be wrong.
+if [[ "${LARAVEL_SAIL:-}" == 1 ]]; then
+    echo "Error: Run the installer on the host, not inside Sail" >&2
+    echo "  (vendor/bin/worktree install or php artisan worktree:install, without sail)." >&2
+    exit 1
+fi
 
-    if ($testCommand !== '') {
-        $lines[] = '';
-        $lines[] = "# Test command (default: php artisan test)";
-        $lines[] = "WORKTREE_TEST_COMMAND=$testCommand";
-    } else {
-        $lines[] = '';
-        $lines[] = '# Test command (default: php artisan test)';
-        $lines[] = '# WORKTREE_TEST_COMMAND=php vendor/bin/phpunit';
-    }
+PROJECT_DIR="${OPT_PROJECT_DIR-$(resolve_project_root)}"
 
-    if ($runtime === 'docker-compose') {
-        $service = $opts['compose-service'] ?? 'app';
-        $projectBase = sanitizeComposeProjectBase($opts['compose-project-base'] ?? basename($projectDir));
-        $lines[] = '';
-        $lines[] = '# docker-compose runtime settings';
-        $lines[] = "WORKTREE_COMPOSE_SERVICE=$service";
-        $lines[] = '# WORKTREE_COMPOSE_FILE=docker-compose.yml';
-        $lines[] = "WORKTREE_COMPOSE_PROJECT_BASE=$projectBase";
-    }
+SAIL_DETECTED=false
+if [[ -n "${OPT_RUNTIME+x}" ]]; then
+    RUNTIME_OPT="$OPT_RUNTIME"
+elif detect_sail "$PROJECT_DIR"; then
+    SAIL_DETECTED=true
+    RUNTIME_OPT=docker-image
+    OPT_DOCKER_IMAGE="${OPT_DOCKER_IMAGE-$SAIL_IMAGE}"
+    OPT_DOCKER_NETWORK="${OPT_DOCKER_NETWORK-$SAIL_NETWORK}"
+else
+    RUNTIME_OPT=native
+fi
 
-    if ($runtime === 'docker-image') {
-        $image = $opts['docker-image'] ?? '';
-        $network = $opts['docker-network'] ?? '';
+if ! STUBS_DIR="${OPT_STUBS_DIR-$(find_stubs_dir "$PROJECT_DIR")}"; then
+    echo "Error: Could not locate package stubs directory." >&2
+    echo "  Pass --stubs-dir=/path/to/vendor/anthonyiles/worktree-isolation/stubs" >&2
+    exit 1
+fi
 
-        if ($image === '') {
-            echo "  Tip: Set WORKTREE_DOCKER_IMAGE in .worktree-isolation.env or pass --docker-image\n";
-        }
-        if ($network === '') {
-            echo "  Tip: Set WORKTREE_DOCKER_NETWORK in .worktree-isolation.env or pass --docker-network\n";
-        }
+# ---------------------------------------------------------------------------
+# Install
+# ---------------------------------------------------------------------------
+echo "Installing worktree isolation..."
+echo ""
 
-        $lines[] = '';
-        $lines[] = '# docker-image runtime settings';
-        $lines[] = "WORKTREE_DOCKER_IMAGE=$image";
-        $lines[] = "WORKTREE_DOCKER_NETWORK=$network";
-        $lines[] = '# WORKTREE_DOCKER_WORKDIR=/var/www/html';
-    }
+if [[ "$SAIL_DETECTED" == true ]]; then
+    echo "  Detected Laravel Sail: using the docker-image runtime"
+fi
 
-    $lines[] = '';
-    $lines[] = '# Common settings';
-    $lines[] = 'WORKTREE_TESTING_ENV_FILE=.env.testing';
-    $lines[] = 'WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example';
-    $lines[] = 'WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE';
-    $lines[] = '';
-    $lines[] = '# Additional env vars to pass to the test container (space-separated, docker-image only)';
-    $lines[] = '# WORKTREE_EXTRA_ENV_VARS=';
-    $lines[] = '';
-    $lines[] = '# Per-worktree development database (MySQL/MariaDB)';
-    $lines[] = 'WORKTREE_DEV_DB_PER_WORKTREE=true';
-    $lines[] = '# WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction';
-    $lines[] = '# WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction';
-    $lines[] = '';
+# 1. Verify git version
+verify_git_version || exit 1
 
-    file_put_contents($envFile, implode("\n", $lines));
-    echo "  Created: .worktree-isolation.env\n";
-}
+# 2. Create .worktree-isolation.env — the only file this installer writes
+# into the project. Everything else runs from vendor/ via vendor/bin/worktree
+# (the only Composer "bin"), which dispatches to the sibling scripts.
+create_env_config
 
-function configureGitHooks(string $projectDir, string $stubsDir): void
-{
-    // hook.*.command must be an absolute path: git resolves a relative one
-    // against the cwd of whatever worktree is running the hook (the new
-    // worktree, for post-checkout), not the main repo.
-    // Run through bash so it works even when Composer didn't keep the
-    // executable bit (zip dists without unzip).
-    $hookCommand = 'bash ' . escapeshellarg("$stubsDir/githooks/post-checkout-worktree-setup.sh");
+# 3. Configure git hooks
+configure_git_hooks
 
-    exec(
-        'cd ' . escapeshellarg($projectDir)
-            . ' && git config --local hook.worktree-setup.command ' . escapeshellarg($hookCommand)
-            . ' && git config --local --replace-all hook.worktree-setup.event post-checkout 2>&1',
-        $output,
-        $exitCode
-    );
+# 4. Optionally tell AI agents to go through vendor/bin/worktree
+if [[ "$AGENTS" == true ]]; then
+    if [[ -n "${OPT_AGENTS+x}" ]]; then
+        write_agent_instructions "$OPT_AGENTS"
+    else
+        write_agent_instructions
+    fi
+fi
 
-    if ($exitCode === 0) {
-        echo "  Configured: hook.worktree-setup.command/event (local git config)\n";
-    } else {
-        echo "  Warning: Could not configure git hooks automatically.\n";
-        echo "  Run manually:\n";
-        echo '    git config --local hook.worktree-setup.command ' . escapeshellarg($hookCommand) . "\n";
-        echo "    git config --local --replace-all hook.worktree-setup.event post-checkout\n";
-    }
-}
-
-function writeAgentInstructions(string $projectDir, ?string $files): void
-{
-    $targets = $files !== null
-        ? array_values(array_filter(array_map('trim', explode(',', $files))))
-        : defaultAgentFiles($projectDir);
-
-    foreach ($targets as $file) {
-        upsertAgentBlock($projectDir, $file);
-    }
-
-    if ($files === null && $targets === ['AGENTS.md'] && ! file_exists("$projectDir/CLAUDE.md")) {
-        echo "  Tip: Claude Code reads CLAUDE.md, not AGENTS.md. Add a CLAUDE.md containing\n";
-        echo "       @AGENTS.md, or re-run with --agents=AGENTS.md,CLAUDE.md\n";
-    }
-}
-
-function defaultAgentFiles(string $projectDir): array
-{
-    $existing = array_values(array_filter(
-        ['AGENTS.md', 'CLAUDE.md'],
-        fn (string $file) => file_exists("$projectDir/$file")
-    ));
-
-    if ($existing === []) {
-        return ['AGENTS.md'];
-    }
-
-    // A CLAUDE.md that imports AGENTS.md already gets the block through it.
-    if (count($existing) === 2 && str_contains((string) file_get_contents("$projectDir/CLAUDE.md"), '@AGENTS.md')) {
-        return ['AGENTS.md'];
-    }
-
-    return $existing;
-}
-
-function upsertAgentBlock(string $projectDir, string $file): void
-{
-    $start = '<!-- worktree-isolation:start -->';
-    $end = '<!-- worktree-isolation:end -->';
-    $block = $start . "\n" . agentInstructions() . $end;
-
-    $path = "$projectDir/$file";
-    $existing = file_exists($path) ? (string) file_get_contents($path) : null;
-
-    if ($existing === null) {
-        if (! is_dir(dirname($path))) {
-            mkdir(dirname($path), 0777, true);
-        }
-        file_put_contents($path, $block . "\n");
-        echo "  Created: $file (AI agent instructions)\n";
-        return;
-    }
-
-    $pattern = '/' . preg_quote($start, '/') . '.*?' . preg_quote($end, '/') . '/s';
-
-    if (preg_match($pattern, $existing) === 1) {
-        $updated = preg_replace_callback($pattern, fn () => $block, $existing, 1);
-        if ($updated === $existing) {
-            echo "  Unchanged: $file (AI agent instructions already current)\n";
-            return;
-        }
-        file_put_contents($path, $updated);
-        echo "  Updated: $file (AI agent instructions)\n";
-        return;
-    }
-
-    $separator = $existing === '' ? '' : (str_ends_with($existing, "\n") ? "\n" : "\n\n");
-    file_put_contents($path, $existing . $separator . $block . "\n");
-    echo "  Added: AI agent instructions to $file\n";
-}
-
-function agentInstructions(): string
-{
-    return <<<'MD'
-    ## Git worktrees
-
-    Each git worktree of this project gets its own dependencies, env files and databases.
-    Inside a worktree (`.git` is a file, not a directory), run every command through
-    `vendor/bin/worktree`:
-
-    - `vendor/bin/worktree test`, not `php artisan test`, `sail test` or `phpunit`
-    - `vendor/bin/worktree composer install`, `vendor/bin/worktree npm run build`
-    - `vendor/bin/worktree php artisan migrate`
-
-    Never call `sail`, `docker compose`, `composer`, `npm` or `php artisan` directly in a
-    worktree: they can run in another checkout's container against its database. In the
-    main checkout, run commands as usual. Full guide:
-    `vendor/anthonyiles/worktree-isolation/docs/ai-agents.md`
-
-    MD;
-}
+echo ""
+echo "Worktree isolation installed and activated!"
+echo ""
+echo "What was done:"
+echo "  - Created .worktree-isolation.env (runtime: $RUNTIME_OPT)"
+echo "  - Configured git hook.worktree-setup.command/event (local, this clone only)"
+echo "    pointing at the vendor copy of the post-checkout hook"
+echo ""
+echo "Next steps:"
+echo "  1. Review .worktree-isolation.env and adjust if needed"
+echo "  2. Commit .worktree-isolation.env"
+echo "  3. Other engineers just need to run: vendor/bin/worktree install (or php artisan worktree:install for Laravel)"
+echo "     once per clone — this activates the hook locally and works for worktrees on any branch,"
+echo "     including branches that predate this package being added."
+echo ""
