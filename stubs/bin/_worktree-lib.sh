@@ -229,12 +229,12 @@ append_testing_env_args() {
 }
 
 # Usage: run_in_runtime [-e VAR=value]... command [args...]
-run_in_runtime() {
-    local cmd
+# The values are exported and docker gets only their names (it reads the
+# values from its environment), so secrets like DB_PASSWORD never show up in
+# a process listing. The subshell keeps the exports from leaking.
+run_in_runtime() (
+    local cmd=()
     case "$RUNTIME" in
-        native)
-            cmd=(env)
-            ;;
         docker-compose)
             cmd=("${COMPOSE_EXEC_ARGS[@]}" -T)
             ;;
@@ -245,17 +245,14 @@ run_in_runtime() {
     esac
 
     while [[ "${1:-}" == -e ]]; do
-        if [[ "$RUNTIME" == native ]]; then
-            cmd+=("$2")
-        else
-            cmd+=(-e "$2")
-        fi
+        export "${2?}"
+        [[ "$RUNTIME" == native ]] || cmd+=(-e "${2%%=*}")
         shift 2
     done
 
     case "$RUNTIME" in
         native)
-            (cd "$PROJECT_ROOT" && "${cmd[@]}" "$@")
+            cd "$PROJECT_ROOT" && "$@"
             ;;
         docker-compose)
             "${cmd[@]}" "$COMPOSE_SERVICE" "$@"
@@ -266,7 +263,7 @@ run_in_runtime() {
             "${cmd[@]}" --entrypoint "$entrypoint" "$IMAGE" "$@"
             ;;
     esac
-}
+)
 
 # Reads KEY's value from a dotenv file without sourcing it (.env files aren't
 # guaranteed to be valid shell).

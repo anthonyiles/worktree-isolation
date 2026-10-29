@@ -28,14 +28,15 @@ ENV
 fake_resolver_output() {
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
-echo "\$*" >> "$DOCKER_LOG"
-if [[ "\$*" == *"up -d"* ]]; then
+args="\$("$FAKE_BIN/docker-args" "\$@")"
+echo "\$args" >> "$DOCKER_LOG"
+if [[ "\$args" == *"up -d"* ]]; then
     echo "up with \$(grep '^DB_DATABASE=' .env) \$(grep '^DB_DATABASE=' .env.testing)" >> "$DOCKER_LOG"
 fi
-if [[ "\$*" == *DevDatabaseResolver*"php -r"* ]]; then
+if [[ "\$args" == *DevDatabaseResolver*"php -r"* ]]; then
     printf '%s' "$DEV_DB_NOISE"
     echo "myapp_wt_feature-auth $DEV_DB_STATE"
-elif [[ "\$*" == *"php -r"* ]]; then
+elif [[ "\$args" == *"php -r"* ]]; then
     echo "testing_wt_feature-auth created"
 fi
 exit 0
@@ -178,8 +179,9 @@ ENV
 @test "keeps .env.testing on the worktree's database when creating it fails" {
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
-echo "\$*" >> "$DOCKER_LOG"
-[[ "\$*" != *"php -r"* ]]
+args="\$("$FAKE_BIN/docker-args" "\$@")"
+echo "\$args" >> "$DOCKER_LOG"
+[[ "\$args" != *"php -r"* ]]
 SCRIPT
 
     run bash "$STUBS_DIR/worktree-setup"
@@ -232,12 +234,13 @@ SCRIPT
     echo 0 > "$ATTEMPTS"
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
-echo "\$*" >> "$DOCKER_LOG"
-if [[ "\$*" == *"php -r"* ]]; then
+args="\$("$FAKE_BIN/docker-args" "\$@")"
+echo "\$args" >> "$DOCKER_LOG"
+if [[ "\$args" == *"php -r"* ]]; then
     n=\$((\$(cat "$ATTEMPTS") + 1))
     echo "\$n" > "$ATTEMPTS"
     (( n > 2 )) || exit 1
-    if [[ "\$*" == *DevDatabaseResolver* ]]; then
+    if [[ "\$args" == *DevDatabaseResolver* ]]; then
         echo "myapp_wt_feature-auth created"
     else
         echo "testing_wt_feature-auth created"

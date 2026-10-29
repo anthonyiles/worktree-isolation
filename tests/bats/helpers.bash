@@ -12,9 +12,26 @@ setup_docker_compose_worktree() {
     DOCKER_LOG="$BATS_TEST_TMPDIR/docker.log"
     : > "$DOCKER_LOG"
 
+    # Prints its arguments as docker would see them: a bare "-e NAME" takes
+    # NAME's value from the environment.
+    cat > "$FAKE_BIN/docker-args" <<'SCRIPT'
+#!/usr/bin/env bash
+out=()
+prev=
+for arg in "$@"; do
+    if [[ "$prev" == -e && "$arg" != *=* ]]; then
+        arg="$arg=${!arg-}"
+    fi
+    out+=("$arg")
+    prev="$arg"
+done
+echo "${out[*]}"
+SCRIPT
+    chmod +x "$FAKE_BIN/docker-args"
+
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
-echo "\$*" >> "$DOCKER_LOG"
+"$FAKE_BIN/docker-args" "\$@" >> "$DOCKER_LOG"
 exit 0
 SCRIPT
     chmod +x "$FAKE_BIN/docker"
@@ -56,7 +73,7 @@ log_docker_argv() {
     : > "$DOCKER_ARGV_LOG"
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
-echo "\$*" >> "$DOCKER_LOG"
+"$FAKE_BIN/docker-args" "\$@" >> "$DOCKER_LOG"
 printf '[%s] ' "\$@" >> "$DOCKER_ARGV_LOG"
 echo >> "$DOCKER_ARGV_LOG"
 exit 0
