@@ -10,9 +10,9 @@ use PDOException;
 
 class TestDatabaseResolver
 {
-    const int MAX_DERIVED_LENGTH = 40;
+    const MAX_DERIVED_LENGTH = 40;
 
-    const int HASH_LENGTH = 8;
+    const HASH_LENGTH = 8;
 
     /**
      * Derive a per-worktree test database name: "{base}_wt_{worktree}".

@@ -8,9 +8,9 @@ use InvalidArgumentException;
 
 class DevDatabaseResolver
 {
-    const string MARKER = '_wt_';
+    const MARKER = '_wt_';
 
-    const int MAX_DERIVED_LENGTH = 64;
+    const MAX_DERIVED_LENGTH = 64;
 
     /**
      * Derive a per-worktree development database name: "{base}_wt_{worktree}".
