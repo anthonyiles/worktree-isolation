@@ -218,14 +218,12 @@ if [[ "$DEV_DB_PER_WORKTREE" =~ ^(true|1)$ && -f "$ENV_PATH" ]]; then
 
         if [[ -n "$DEV_DB_MIGRATE_COMMAND" ]]; then
             echo "Running: $DEV_DB_MIGRATE_COMMAND"
-            # shellcheck disable=SC2086
-            run_in_runtime $DEV_DB_MIGRATE_COMMAND || echo "Warning: migrate command failed." >&2
+            run_in_runtime bash -c "$DEV_DB_MIGRATE_COMMAND" || echo "Warning: migrate command failed." >&2
         fi
         # Seeding isn't idempotent, so only seed a database this run created.
         if [[ -n "$DEV_DB_SEED_COMMAND" && "$result" == *" created" ]]; then
             echo "Running: $DEV_DB_SEED_COMMAND"
-            # shellcheck disable=SC2086
-            run_in_runtime $DEV_DB_SEED_COMMAND || echo "Warning: seed command failed." >&2
+            run_in_runtime bash -c "$DEV_DB_SEED_COMMAND" || echo "Warning: seed command failed." >&2
         fi
     else
         echo "Warning: Could not create the development database '$DEV_DB' — check DB_* settings in .env." >&2

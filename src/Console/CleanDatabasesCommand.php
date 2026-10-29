@@ -10,7 +10,8 @@ use Symfony\Component\Process\Process;
 class CleanDatabasesCommand extends Command
 {
     protected $signature = 'worktree:clean
-        {--force : Drop databases without confirmation}';
+        {--force : Drop databases without confirmation}
+        {--stale : Only drop databases whose worktree no longer exists}';
 
     protected $description = 'Drop all per-worktree test databases';
 
@@ -22,6 +23,10 @@ class CleanDatabasesCommand extends Command
 
         if ($this->option('force')) {
             $args[] = '--force';
+        }
+
+        if ($this->option('stale')) {
+            $args[] = '--stale';
         }
 
         $process = new Process($args, base_path());

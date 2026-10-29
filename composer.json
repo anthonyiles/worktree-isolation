@@ -12,6 +12,7 @@
         "orchestra/testbench": "^10.0|^11.0"
     },
     "suggest": {
+        "ext-pdo_mysql": "Required for per-worktree MySQL/MariaDB databases (in the runtime that runs setup, test and clean).",
         "illuminate/support": "Required for artisan commands (worktree:install, worktree:clean). Not needed if using vendor/bin/worktree directly."
     },
     "autoload": {
@@ -40,7 +41,5 @@
     },
     "config": {
         "sort-packages": true
-    },
-    "minimum-stability": "dev",
-    "prefer-stable": true
+    }
 }

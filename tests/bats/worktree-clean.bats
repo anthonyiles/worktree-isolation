@@ -41,3 +41,14 @@ run_clean() {
     run run_clean
     [[ "$output" == *"Could not connect to the test database server at 127.0.0.1:1"* ]]
 }
+
+@test "--stale refuses to guess when it can't list the worktrees" {
+    not_a_repo="$BATS_TEST_TMPDIR/not-a-repo"
+    mkdir -p "$not_a_repo"
+    cp "$PROJECT_DIR/.worktree-isolation.env" "$PROJECT_DIR/.env" "$not_a_repo/"
+
+    run php "$STUBS_DIR/worktree-clean" --project-dir="$not_a_repo" --stale --force
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Could not list this repository's worktrees"* ]]
+    [[ "$output" != *"Dropped"* ]]
+}

@@ -116,7 +116,11 @@ verify_git_version() {
 
     if (( 10#$major < 2 || (10#$major == 2 && 10#$minor < 54) )); then
         echo "Error: Git 2.54+ is required for config-based hooks. You have Git $major.$minor." >&2
-        echo "  Upgrade with: brew upgrade git" >&2
+        if [[ "$(uname -s)" == Darwin ]]; then
+            echo "  Upgrade with: brew upgrade git" >&2
+        else
+            echo "  Install a newer git from https://git-scm.com/downloads or your package manager." >&2
+        fi
         return 1
     fi
 
