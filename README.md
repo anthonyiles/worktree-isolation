@@ -107,7 +107,7 @@ WORKTREE_RUNTIME=native
 # WORKTREE_DOCKER_WORKDIR=/var/www/html
 # WORKTREE_EXTRA_ENV_VARS="FOO BAR"          # extra .env.testing vars to pass to the test container
 
-# Per-worktree development databases (off when this line is missing)
+# Per-worktree development databases (false or unset: worktrees share the main checkout's)
 WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction   # empty to skip
 # WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction      # empty to skip
@@ -130,13 +130,6 @@ vendor/bin/worktree install --agents=CLAUDE.md,AGENTS.md   # or name the files
 ```
 
 This adds a short block between `<!-- worktree-isolation:start -->` and `<!-- worktree-isolation:end -->` markers, and updates it in place when re-run. A `CLAUDE.md` that imports `@AGENTS.md` is left alone. The full agent guide is [docs/ai-agents.md](docs/ai-agents.md).
-
-## Upgrading
-
-- Use `vendor/bin/worktree install|setup|test|clean` instead of the old `vendor/bin/worktree-install`, `worktree-setup`, `test` and `worktree-clean`.
-- Configs written by older versions may lack `WORKTREE_DEV_DB_PER_WORKTREE=true`; add it to get per-worktree development databases.
-- `WORKTREE_DB_PER_WORKTREE_KEY` is no longer read; the flag is always `TEST_DB_PER_WORKTREE`.
-- The scripts never read `config/worktree-isolation.php`. If you published it, you can delete it.
 
 ## License
 
