@@ -2,6 +2,11 @@
 
 declare(strict_types=1);
 
+// Deprecated: the worktree scripts never read this file. They're configured
+// by .worktree-isolation.env in the project root. Kept only so existing
+// config('worktree-isolation.*') calls keep working; it will be removed in
+// the next major version.
+
 return [
 
     /*
