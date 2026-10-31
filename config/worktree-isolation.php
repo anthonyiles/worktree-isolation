@@ -170,35 +170,4 @@ return [
 
     'dev_db_seed_command' => env('WORKTREE_DEV_DB_SEED_COMMAND', 'php artisan db:seed --no-interaction'),
 
-    /*
-    |--------------------------------------------------------------------------
-    | Environment Variables Passed to Test Container
-    |--------------------------------------------------------------------------
-    |
-    | These environment variable names are read from .env.testing and forwarded
-    | to the Docker container when running tests via vendor/bin/worktree test.
-    | Only relevant for the "docker-image" runtime.
-    |
-    */
-
-    'test_env_vars' => [
-        'APP_ENV',
-        'APP_KEY',
-        'APP_DEBUG',
-        'DB_CONNECTION',
-        'DB_HOST',
-        'DB_PORT',
-        'DB_DATABASE',
-        'DB_USERNAME',
-        'DB_PASSWORD',
-        'DB_SSL_VERIFY_SERVER_CERT',
-        'BCRYPT_ROUNDS',
-        'CACHE_DRIVER',
-        'MAIL_MAILER',
-        'QUEUE_CONNECTION',
-        'SESSION_DRIVER',
-        'TELESCOPE_ENABLED',
-        'TEST_DB_PER_WORKTREE',
-    ],
-
 ];

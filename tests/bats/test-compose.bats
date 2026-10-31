@@ -40,3 +40,17 @@ setup() {
     run grep -F -- "[-f] [my compose.yml]" "$DOCKER_ARGV_LOG"
     [ "$status" -eq 0 ]
 }
+
+@test "passes every .env.testing value into the container by name" {
+    log_docker_argv
+    printf 'MY_CUSTOM_FLAG=on\nSTRIPE_SECRET=sk_test_123\n' >> "$WORKTREE_DIR/.env.testing"
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 0 ]
+
+    run grep -- " exec " "$DOCKER_LOG"
+    [[ "$output" == *"-e MY_CUSTOM_FLAG=on"* ]]
+    [[ "$output" == *"-e STRIPE_SECRET=sk_test_123"* ]]
+    run grep -c -- "sk_test_123" "$DOCKER_ARGV_LOG"
+    [ "$output" -eq 0 ]
+}

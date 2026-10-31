@@ -99,9 +99,13 @@ elif [[ -n "$MAIN_TEST_DB" && "${DB_DATABASE:-}" == "$MAIN_TEST_DB" ]]; then
     exit 1
 fi
 
-# A docker-image container starts fresh, so it also needs the testing env.
-if [[ "$RUNTIME" == docker-image ]]; then
-    append_testing_env_args
+# A container doesn't inherit this shell's environment, so pass it every
+# testing env value, by name (see run_in_runtime). Natively the test command
+# inherits them from load_env_file.
+if [[ "$RUNTIME" != native ]]; then
+    while IFS= read -r key; do
+        TEST_ENV+=(-e "$key=${!key-}")
+    done < <(env_file_keys "$PROJECT_ROOT/$TESTING_ENV_FILE")
 fi
 
 run_in_runtime "${TEST_ENV[@]}" bash -c "$RUN_TESTS" -- "$@"

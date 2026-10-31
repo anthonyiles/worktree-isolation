@@ -107,7 +107,6 @@ WORKTREE_RUNTIME=native
 # WORKTREE_DOCKER_IMAGE=sail-8.4/app
 # WORKTREE_DOCKER_NETWORK=myproject_sail
 # WORKTREE_DOCKER_WORKDIR=/var/www/html
-# WORKTREE_EXTRA_ENV_VARS="FOO BAR"          # extra .env.testing vars to pass to the test container
 
 # Per-worktree development databases (false or unset: worktrees share the main checkout's)
 WORKTREE_DEV_DB_PER_WORKTREE=true
