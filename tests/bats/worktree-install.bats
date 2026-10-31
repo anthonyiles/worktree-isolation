@@ -113,6 +113,17 @@ ENV
     [[ "$output" == *"Git version: 3.0 (OK)"* ]]
 }
 
+@test "only suggests brew for upgrading git on macOS" {
+    printf '#!/usr/bin/env bash\necho "${FAKE_UNAME:-Linux}"\n' > "$FAKE_BIN/uname"
+    chmod +x "$FAKE_BIN/uname"
+
+    FAKE_GIT_VERSION="git version 2.9.5" run run_install
+    [[ "$output" == *"git-scm.com"* && "$output" != *"brew"* ]]
+
+    FAKE_UNAME=Darwin FAKE_GIT_VERSION="git version 2.9.5" run run_install
+    [[ "$output" == *"brew upgrade git"* ]]
+}
+
 @test "writes the native config" {
     run run_install
     [ "$status" -eq 0 ]

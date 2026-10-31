@@ -130,6 +130,7 @@ install_stubs_in_vendor() {
     VENDOR_BIN="$1/vendor/anthonyiles/worktree-isolation/stubs/bin"
     mkdir -p "$VENDOR_BIN"
     cp "$STUBS_DIR"/* "$VENDOR_BIN/"
+    cp -R "$STUBS_DIR/../../src" "$VENDOR_BIN/../../src"
 }
 
 @test "runs clean inside the worktree's stack, where DB_HOST resolves" {

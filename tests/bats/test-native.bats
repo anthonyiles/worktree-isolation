@@ -72,3 +72,11 @@ SCRIPT
     [ "$status" -eq 1 ]
     [[ "$output" == *"could not derive the per-worktree test database from 'myapp'"* ]]
 }
+
+@test "keeps quoted arguments in the test command together" {
+    echo "WORKTREE_TEST_COMMAND='printf \"[%s]\" \"a b\"'" >> "$WORKTREE_DIR/.worktree-isolation.env"
+
+    run bash "$STUBS_DIR/test" "c d"
+    [ "$status" -eq 0 ]
+    [ "${lines[${#lines[@]}-1]}" = "[a b][c d]" ]
+}

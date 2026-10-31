@@ -15,14 +15,18 @@ declare(strict_types=1);
  *
  * Usage:
  *   vendor/bin/worktree clean
+ *   vendor/bin/worktree clean --stale
  *   vendor/bin/worktree clean --force
  */
 
-// Must match WorktreeIsolation\DevDatabaseResolver::MARKER; this script
-// runs without the package autoloader.
-const WORKTREE_DB_MARKER = '_wt_';
+use WorktreeIsolation\DevDatabaseResolver;
+use WorktreeIsolation\TestDatabaseResolver;
 
-$opts = getopt('', ['force', 'project-dir:', 'help']);
+// Loaded directly: this script runs without the package autoloader.
+require_once __DIR__ . '/../../src/TestDatabaseResolver.php';
+require_once __DIR__ . '/../../src/DevDatabaseResolver.php';
+
+$opts = getopt('', ['force', 'stale', 'project-dir:', 'help']);
 
 if (isset($opts['help'])) {
     fwrite(STDOUT, <<<HELP
@@ -34,6 +38,7 @@ if (isset($opts['help'])) {
 
     Options:
       --force            Drop databases without confirmation
+      --stale            Only drop databases whose worktree no longer exists
       --project-dir=PATH Project root (default: auto-detected)
       --help             Show this help
 
@@ -42,11 +47,24 @@ if (isset($opts['help'])) {
 }
 
 $force = isset($opts['force']);
+$stale = isset($opts['stale']);
 $projectDir = $opts['project-dir'] ?? resolveProjectRoot();
 
 $mainDir = mainCheckoutDir($projectDir);
 $targets = cleanupTargets($projectDir, $mainDir);
 $protected = protectedDatabases($mainDir);
+
+if ($stale) {
+    $worktrees = liveWorktreeBasenames($mainDir);
+    if ($worktrees === null) {
+        fwrite(STDERR, "Error: Could not list this repository's worktrees, so --stale can't tell which databases are in use.\n");
+        exit(1);
+    }
+    foreach ($targets as &$target) {
+        $target['protected'] = inUseDatabases($target['resolver'], $target['base'], $worktrees);
+    }
+    unset($target);
+}
 
 $found = [];
 $exitCode = 0;
@@ -69,10 +87,11 @@ foreach ($targets as $target) {
 
     $stmt = $pdo->prepare('SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?');
     $stmt->execute([$target['pattern']]);
-    $databases = array_values(array_diff($stmt->fetchAll(PDO::FETCH_COLUMN), $protected, array_column($found, 1)));
+    $databases = array_values(array_diff($stmt->fetchAll(PDO::FETCH_COLUMN), $protected, $target['protected'] ?? [], array_column($found, 1)));
 
     if (empty($databases)) {
-        echo "No per-worktree {$target['label']} databases found (pattern: {$target['pattern']}).\n";
+        $kind = $stale ? 'stale per-worktree' : 'per-worktree';
+        echo "No $kind {$target['label']} databases found (pattern: {$target['pattern']}).\n";
         continue;
     }
 
@@ -156,29 +175,76 @@ function cleanupTargets(string $projectDir, string $mainDir): array
     $testingEnv = parseEnvFile("$mainDir/$testingFile")
         ?: parseEnvFile("$mainDir/$testingExample")
         ?: parseEnvFile("$projectDir/$testingFile");
-    $testBase = explode(WORKTREE_DB_MARKER, $testingEnv['DB_DATABASE'] ?? '', 2)[0] ?: 'testing';
+    $testBase = explode(DevDatabaseResolver::MARKER, $testingEnv['DB_DATABASE'] ?? '', 2)[0] ?: 'testing';
     if (isMysqlConnection($testingEnv)) {
         $targets[] = [
             'label' => 'test',
+            'resolver' => TestDatabaseResolver::class,
+            'base' => $testBase,
             'file' => $testingFile,
             'env' => $testingEnv,
-            'pattern' => escapeLike($testBase . WORKTREE_DB_MARKER) . '%',
+            'pattern' => escapeLike($testBase . DevDatabaseResolver::MARKER) . '%',
         ];
     }
 
     $devEnabled = in_array($conf['WORKTREE_DEV_DB_PER_WORKTREE'] ?? 'false', ['true', '1'], true);
     $devEnv = parseEnvFile("$mainDir/.env") ?: parseEnvFile("$projectDir/.env");
-    $devBase = explode(WORKTREE_DB_MARKER, $devEnv['DB_DATABASE'] ?? '', 2)[0];
+    $devBase = explode(DevDatabaseResolver::MARKER, $devEnv['DB_DATABASE'] ?? '', 2)[0];
     if ($devEnabled && $devBase !== '' && isMysqlConnection($devEnv)) {
         $targets[] = [
             'label' => 'development',
+            'resolver' => DevDatabaseResolver::class,
+            'base' => $devBase,
             'file' => '.env',
             'env' => $devEnv,
-            'pattern' => escapeLike($devBase . WORKTREE_DB_MARKER) . '%',
+            'pattern' => escapeLike($devBase . DevDatabaseResolver::MARKER) . '%',
         ];
     }
 
     return $targets;
+}
+
+/**
+ * Basenames of the worktrees that still exist; null when git can't list them.
+ * A worktree whose directory is gone ("prunable") doesn't count.
+ *
+ * @return list<string>|null
+ */
+function liveWorktreeBasenames(string $mainDir): ?array
+{
+    exec('git -C ' . escapeshellarg($mainDir) . ' worktree list --porcelain 2>/dev/null', $lines, $exitCode);
+    if ($exitCode !== 0) {
+        return null;
+    }
+
+    $basenames = [];
+    // The first entry is the main checkout.
+    foreach (array_slice(preg_split('/\n\s*\n/', trim(implode("\n", $lines))), 1) as $entry) {
+        if (preg_match('/^worktree (.+)$/m', $entry, $m) === 1 && preg_match('/^prunable\b/m', $entry) !== 1) {
+            $basenames[] = basename($m[1]);
+        }
+    }
+
+    return $basenames;
+}
+
+/**
+ * @param  class-string<TestDatabaseResolver|DevDatabaseResolver>  $resolver
+ * @param  list<string>  $worktrees
+ * @return list<string>
+ */
+function inUseDatabases(string $resolver, string $base, array $worktrees): array
+{
+    $names = [];
+    foreach ($worktrees as $worktree) {
+        try {
+            $names[] = $resolver::derive($base, $worktree);
+        } catch (InvalidArgumentException) {
+            // No name can be derived, so no database of this worktree exists.
+        }
+    }
+
+    return $names;
 }
 
 /**

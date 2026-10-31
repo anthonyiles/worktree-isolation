@@ -71,7 +71,8 @@ RUN_TESTS='
         export DB_DATABASE="${result%% *}"
         echo "Using test database: $DB_DATABASE"
     fi
-    exec $TEST_COMMAND "$@"
+    # eval, so quotes in WORKTREE_TEST_COMMAND group arguments as in a shell.
+    eval "exec $TEST_COMMAND \"\$@\""
 '
 
 TEST_ENV=(-e "TEST_COMMAND=$TEST_COMMAND")
