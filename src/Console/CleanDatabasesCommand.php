@@ -16,9 +16,9 @@ class CleanDatabasesCommand extends Command
 
     public function handle(): int
     {
-        $script = dirname(__DIR__, 2).'/stubs/bin/worktree-clean';
-
-        $args = [PHP_BINARY, $script, '--project-dir='.base_path()];
+        // Through vendor/bin/worktree, so the Docker runtimes run clean in
+        // their container, where DB_HOST (e.g. "mysql") resolves.
+        $args = ['bash', dirname(__DIR__, 2).'/stubs/bin/worktree', 'clean'];
 
         if ($this->option('force')) {
             $args[] = '--force';

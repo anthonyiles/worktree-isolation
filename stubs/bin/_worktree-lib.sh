@@ -9,13 +9,7 @@ load_worktree_config() {
     PROJECT_ROOT="$(git rev-parse --show-toplevel)"
     WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
 
-    local conf_file="$PROJECT_ROOT/.worktree-isolation.env"
-    if [[ -f "$conf_file" ]]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$conf_file"
-        set +a
-    fi
+    load_env_file "$PROJECT_ROOT/.worktree-isolation.env"
 
     RUNTIME="${WORKTREE_RUNTIME:-native}"
     TESTING_ENV_FILE="${WORKTREE_TESTING_ENV_FILE:-.env.testing}"
@@ -169,6 +163,7 @@ derive_test_database_name() {
 # (defaults to the test resolver), WORKTREE_BASENAME, MAIN_DB_DATABASE and
 # DB_* in its environment, and prints "<name> created|existing" as its last line; the
 # leading newline keeps that line intact if PHP emitted a notice first.
+# shellcheck disable=SC2016 # PHP code, expanded by PHP
 ENSURE_DB_PHP='
     require "vendor/autoload.php";
     $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
@@ -230,12 +225,12 @@ append_testing_env_args() {
 }
 
 # Usage: run_in_runtime [-e VAR=value]... command [args...]
-run_in_runtime() {
-    local cmd
+# The values are exported and docker gets only their names (it reads the
+# values from its environment), so secrets like DB_PASSWORD never show up in
+# a process listing. The subshell keeps the exports from leaking.
+run_in_runtime() (
+    local cmd=()
     case "$RUNTIME" in
-        native)
-            cmd=(env)
-            ;;
         docker-compose)
             cmd=("${COMPOSE_EXEC_ARGS[@]}" -T)
             ;;
@@ -246,17 +241,14 @@ run_in_runtime() {
     esac
 
     while [[ "${1:-}" == -e ]]; do
-        if [[ "$RUNTIME" == native ]]; then
-            cmd+=("$2")
-        else
-            cmd+=(-e "$2")
-        fi
+        export "${2?}"
+        [[ "$RUNTIME" == native ]] || cmd+=(-e "${2%%=*}")
         shift 2
     done
 
     case "$RUNTIME" in
         native)
-            (cd "$PROJECT_ROOT" && "${cmd[@]}" "$@")
+            cd "$PROJECT_ROOT" && "$@"
             ;;
         docker-compose)
             "${cmd[@]}" "$COMPOSE_SERVICE" "$@"
@@ -267,19 +259,57 @@ run_in_runtime() {
             "${cmd[@]}" --entrypoint "$entrypoint" "$IMAGE" "$@"
             ;;
     esac
+)
+
+# Dotenv values are parsed, never sourced: .env files aren't guaranteed to be
+# valid shell (e.g. APP_NAME=My App), and sourcing would expand $ and
+# backticks. A quoted value is taken verbatim up to its closing quote; an
+# unquoted one loses a trailing " # comment" and surrounding whitespace.
+# Matches parseEnvFile() in worktree-clean.
+parse_env_value() {
+    local value="$1"
+    value="${value%$'\r'}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    case "$value" in
+        \"*)
+            value="${value#\"}"
+            value="${value%%\"*}"
+            ;;
+        \'*)
+            value="${value#\'}"
+            value="${value%%\'*}"
+            ;;
+        *)
+            value="${value%%[[:space:]]#*}"
+            value="${value%"${value##*[![:space:]]}"}"
+            ;;
+    esac
+    printf '%s\n' "$value"
 }
 
-# Reads KEY's value from a dotenv file without sourcing it (.env files aren't
-# guaranteed to be valid shell).
+ENV_LINE_PATTERN='^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$'
+
+# Reads KEY's value from a dotenv file (the last assignment wins).
 env_file_value() {
-    local file="$1" key="$2" value
-    value="$(grep -E "^${key}=" "$file" 2> /dev/null | tail -n 1)" || return 0
-    value="${value#*=}"
-    value="${value%\"}"
-    value="${value#\"}"
-    value="${value%\'}"
-    value="${value#\'}"
+    local file="$1" key="$2" line value=""
+    [[ -f "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ $ENV_LINE_PATTERN && "${BASH_REMATCH[2]}" == "$key" ]]; then
+            value="$(parse_env_value "${BASH_REMATCH[3]}")"
+        fi
+    done < "$file"
     echo "$value"
+}
+
+# Exports every assignment in a dotenv file.
+load_env_file() {
+    local line
+    [[ -f "$1" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ $ENV_LINE_PATTERN ]]; then
+            export "${BASH_REMATCH[2]}=$(parse_env_value "${BASH_REMATCH[3]}")"
+        fi
+    done < "$1"
 }
 
 # The value goes through ENVIRON rather than a sed expression, so it's never

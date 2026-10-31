@@ -71,15 +71,6 @@ class InstallCommand extends Command
             $this->output->write($buffer);
         });
 
-        if (! $process->isSuccessful()) {
-            return self::FAILURE;
-        }
-
-        $this->callSilently('vendor:publish', [
-            '--tag' => 'worktree-isolation-config',
-            '--force' => (bool) $this->option('force'),
-        ]);
-
-        return self::SUCCESS;
+        return $process->isSuccessful() ? self::SUCCESS : self::FAILURE;
     }
 }

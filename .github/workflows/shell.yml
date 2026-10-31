@@ -1,0 +1,43 @@
+name: shell
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: shellcheck --version
+
+      - name: shellcheck the bash scripts
+        run: grep -l '^#!/usr/bin/env bash' stubs/bin/* stubs/githooks/* | xargs shellcheck -x
+
+  bats-macos:
+    # macOS ships Bash 3.2 as /bin/bash; the scripts must keep working there.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+
+      - run: composer install --no-interaction --prefer-dist
+
+      - run: brew install bats-core git
+
+      - name: Put Bash 3.2 first on PATH
+        run: |
+          mkdir -p "$RUNNER_TEMP/bash32"
+          ln -s /bin/bash "$RUNNER_TEMP/bash32/bash"
+          echo "$RUNNER_TEMP/bash32" >> "$GITHUB_PATH"
+
+      - run: bash --version && git --version
+
+      - run: bats tests/bats

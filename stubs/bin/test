@@ -52,18 +52,14 @@ validate_runtime
 # ---------------------------------------------------------------------------
 # 2. Load testing env vars
 # ---------------------------------------------------------------------------
-if [[ -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$PROJECT_ROOT/$TESTING_ENV_FILE"
-    set +a
-fi
+load_env_file "$PROJECT_ROOT/$TESTING_ENV_FILE"
 
 # ---------------------------------------------------------------------------
 # 3. Run tests
 # ---------------------------------------------------------------------------
 # Runs inside the target runtime. With ENSURE_DB_PHP set, it first derives and
 # creates this worktree's test database and points DB_DATABASE at it.
+# shellcheck disable=SC2016 # expanded by the inner shell
 RUN_TESTS='
     set -o pipefail
     if [[ -n "${ENSURE_DB_PHP:-}" ]]; then

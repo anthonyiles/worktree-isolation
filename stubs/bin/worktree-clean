@@ -205,6 +205,9 @@ function escapeLike(string $value): string
     return addcslashes($value, '%_\\');
 }
 
+// Same rules as parse_env_value() in _worktree-lib.sh: optional "export ",
+// a quoted value up to its closing quote, else the value minus a trailing
+// " # comment".
 function parseEnvFile(string $path): array
 {
     $env = [];
@@ -212,20 +215,16 @@ function parseEnvFile(string $path): array
         return $env;
     }
 
-    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-
-    foreach ($lines as $line) {
-        $line = trim($line);
-        if ($line === '' || str_starts_with($line, '#')) {
+    foreach (file($path, FILE_IGNORE_NEW_LINES) as $line) {
+        if (preg_match('/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/', rtrim($line, "\r"), $m) !== 1) {
             continue;
         }
-        $pos = strpos($line, '=');
-        if ($pos === false) {
-            continue;
+        $value = ltrim($m[2]);
+        if (preg_match('/^(["\'])(.*?)\1/', $value, $quoted) === 1 || preg_match('/^(["\'])(.*)$/', $value, $quoted) === 1) {
+            $env[$m[1]] = $quoted[2];
+        } else {
+            $env[$m[1]] = rtrim(preg_replace('/\s#.*$/', '', $value) ?? '');
         }
-        $key = trim(substr($line, 0, $pos));
-        $value = trim(substr($line, $pos + 1));
-        $env[$key] = trim($value, '"\'');
     }
 
     return $env;

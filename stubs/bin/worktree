@@ -77,7 +77,9 @@ case "$COMMAND" in
             source "$SCRIPT_DIR/_worktree-lib.sh"
             load_worktree_config
         fi
-        if [[ "${RUNTIME:-native}" == native ]]; then
+        # Already inside the runtime (e.g. `sail artisan worktree:clean`):
+        # DB_HOST resolves here, and there's no docker to reach it with.
+        if [[ "${RUNTIME:-native}" == native || "${LARAVEL_SAIL:-}" == 1 ]] || ! command -v docker > /dev/null 2>&1; then
             exec php "$SCRIPT_DIR/worktree-clean" "$@"
         fi
         ROOT_REAL="$(cd -P "$PROJECT_ROOT" && pwd)"

@@ -10,6 +10,7 @@ setup() {
 }
 
 @test "brings up its own stack and threads -p through every docker compose call" {
+    echo '{}' > "$WORKTREE_DIR/package.json"
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
     [ -s "$DOCKER_LOG" ]
@@ -51,6 +52,7 @@ setup() {
 @test "keeps a compose file path with spaces as a single argument" {
     log_docker_argv
     echo "WORKTREE_COMPOSE_FILE=\"my compose.yml\"" >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo '{}' > "$WORKTREE_DIR/package.json"
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
@@ -81,4 +83,35 @@ setup() {
     [[ "$output" == *"Nothing to set up"* ]]
     run grep -- "up -d" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
+}
+
+@test "skips JavaScript dependencies without a package.json" {
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    run grep -E -- "(npm|pnpm|yarn|bun) install" "$DOCKER_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "installs JavaScript dependencies with the lockfile's package manager" {
+    echo '{}' > "$WORKTREE_DIR/package.json"
+    touch "$WORKTREE_DIR/pnpm-lock.yaml"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    run grep -c -- "app pnpm install" "$DOCKER_LOG"
+    [ "$output" -eq 1 ]
+}
+
+@test "only warns when installing JavaScript dependencies fails" {
+    echo '{}' > "$WORKTREE_DIR/package.json"
+    cat > "$FAKE_BIN/docker" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$*" >> "$DOCKER_LOG"
+[[ "\$*" != *"npm install"* ]]
+SCRIPT
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Warning: npm install --no-progress failed"* ]]
+    [[ "$output" == *"Worktree setup complete"* ]]
 }
