@@ -23,8 +23,8 @@ ENV
     cp "$WORKTREE_DIR/.env.testing" "$MAIN_REPO/.env.testing"
 }
 
-# The fake docker answers the resolver's `php -r` call the way the real
-# snippet would: "<name> created|existing".
+# The fake docker answers the `php -r` call that creates a database the way
+# the real snippet would: "<name> created|existing".
 fake_resolver_output() {
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
@@ -33,7 +33,7 @@ echo "\$args" >> "$DOCKER_LOG"
 if [[ "\$args" == *"up -d"* ]]; then
     echo "up with \$(grep '^DB_DATABASE=' .env) \$(grep '^DB_DATABASE=' .env.testing)" >> "$DOCKER_LOG"
 fi
-if [[ "\$args" == *DevDatabaseResolver*"php -r"* ]]; then
+if [[ "\$args" == *"DB_DATABASE=myapp_wt_"*"php -r"* ]]; then
     printf '%s' "$DEV_DB_NOISE"
     echo "myapp_wt_feature-auth $DEV_DB_STATE"
 elif [[ "\$args" == *"php -r"* ]]; then
@@ -139,7 +139,7 @@ ENV
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
     [ "$output" = "DB_DATABASE=myapp" ]
-    run grep -- "DevDatabaseResolver" "$DOCKER_LOG"
+    run grep -- "-e DB_DATABASE=myapp" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
 
@@ -151,7 +151,7 @@ ENV
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
     [ "$output" = "DB_DATABASE=myapp" ]
-    run grep -- "DevDatabaseResolver" "$DOCKER_LOG"
+    run grep -- "-e DB_DATABASE=myapp" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
 
@@ -172,7 +172,7 @@ ENV
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
     [ "$output" = "DB_DATABASE=testing_wt_feature-auth" ]
-    run grep -F -- 'RESOLVER_CLASS=WorktreeIsolation\TestDatabaseResolver' "$DOCKER_LOG"
+    run grep -- "-e DB_DATABASE=testing_wt_feature-auth .* php -r" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -212,7 +212,7 @@ SCRIPT
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
     [ "$output" = "DB_DATABASE=" ]
-    run grep -- "DevDatabaseResolver" "$DOCKER_LOG"
+    run grep -- "-e DB_DATABASE=myapp" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
 
@@ -224,7 +224,7 @@ SCRIPT
     [ "$status" -eq 0 ]
 
     [ "$(cat "$WORKTREE_DIR/.env.testing")" = "$(cat "$MAIN_REPO/.env.testing")" ]
-    run grep -F -- 'RESOLVER_CLASS=WorktreeIsolation\TestDatabaseResolver' "$DOCKER_LOG"
+    run grep -- "-e DB_DATABASE=testing" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
 
@@ -240,7 +240,7 @@ if [[ "\$args" == *"php -r"* ]]; then
     n=\$((\$(cat "$ATTEMPTS") + 1))
     echo "\$n" > "$ATTEMPTS"
     (( n > 2 )) || exit 1
-    if [[ "\$args" == *DevDatabaseResolver* ]]; then
+    if [[ "\$args" == *"DB_DATABASE=myapp_wt_"* ]]; then
         echo "myapp_wt_feature-auth created"
     else
         echo "testing_wt_feature-auth created"

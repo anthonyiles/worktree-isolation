@@ -146,3 +146,31 @@ setup() {
     [ ! -e "$BATS_TEST_TMPDIR/pwned" ]
     [ "$(bash -c 'echo "$APP_NAME"')" = "My App" ]
 }
+
+# Prints the PHP resolver's name, or ERR when it refuses.
+php_derive() {
+    php -r '
+        $src = $argv[1];
+        require "$src/WorktreeDatabaseResolver.php";
+        require "$src/DevDatabaseResolver.php";
+        require "$src/TestDatabaseResolver.php";
+        try {
+            echo ("WorktreeIsolation\\" . $argv[2])::derive($argv[3], $argv[4]);
+        } catch (InvalidArgumentException) {
+            echo "ERR";
+        }
+    ' -- "$BATS_TEST_DIRNAME/../../src" "$@"
+}
+
+@test "derives the same database names as the PHP resolvers, in a UTF-8 locale too" {
+    local long base name bash_name
+    long="$(printf 'a%.0s' {1..70})"
+    for name in feature-auth Feature/Auth "Fëature-Äbc" "日本" -n -e ___ "$long" feature-very-long-branch-name-one; do
+        for base in testing myapp myapp_test_wt_old "$long"; do
+            bash_name="$(LC_ALL=en_US.UTF-8 derive_dev_database_name "$base" "$name" 2> /dev/null)" || bash_name=ERR
+            [ "$bash_name" = "$(php_derive DevDatabaseResolver "$base" "$name")" ] || { echo "dev: $base / $name: $bash_name"; return 1; }
+            bash_name="$(LC_ALL=en_US.UTF-8 derive_test_database_name "$base" "$name" 2> /dev/null)" || bash_name=ERR
+            [ "$bash_name" = "$(php_derive TestDatabaseResolver "$base" "$name")" ] || { echo "test: $base / $name: $bash_name"; return 1; }
+        done
+    done
+}
