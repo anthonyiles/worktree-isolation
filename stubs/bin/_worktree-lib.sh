@@ -201,25 +201,16 @@ build_docker_image_args() {
     fi
 }
 
-# Appends "-e VAR=value" pairs for the testing environment to TEST_ENV.
-append_testing_env_args() {
-    local DEFAULT_ENV_VARS=(
-        APP_ENV APP_KEY APP_DEBUG
-        DB_CONNECTION DB_HOST DB_PORT DB_DATABASE DB_USERNAME DB_PASSWORD DB_SSL_VERIFY_SERVER_CERT
-        BCRYPT_ROUNDS CACHE_DRIVER MAIL_MAILER QUEUE_CONNECTION SESSION_DRIVER
-        TELESCOPE_ENABLED TEST_DB_PER_WORKTREE
-    )
-
-    local EXTRA_VARS=()
-    IFS=' ' read -ra EXTRA_VARS <<< "${WORKTREE_EXTRA_ENV_VARS:-}"
-    # Bash < 4.4 (macOS's /bin/bash) treats "${EMPTY[@]}" as unbound under set -u.
-    local ENV_VARS=("${DEFAULT_ENV_VARS[@]}" ${EXTRA_VARS[@]+"${EXTRA_VARS[@]}"})
-
-    for var in "${ENV_VARS[@]}"; do
-        if [[ -n "${!var:-}" ]]; then
-            TEST_ENV+=(-e "$var=${!var}")
+# Prints the key of every assignment in a dotenv file, once each.
+env_file_keys() {
+    local line seen=" "
+    [[ -f "$1" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ $ENV_LINE_PATTERN && "$seen" != *" ${BASH_REMATCH[2]} "* ]]; then
+            seen+="${BASH_REMATCH[2]} "
+            echo "${BASH_REMATCH[2]}"
         fi
-    done
+    done < "$1"
 }
 
 # Usage: run_in_runtime [-e VAR=value]... command [args...]

@@ -104,22 +104,12 @@ setup() {
     [ "$(cat "$file")" = "$(printf 'DB_DATABASE_URL=keep\nDB_DATABASE=new')" ]
 }
 
-@test "append_testing_env_args handles an empty WORKTREE_EXTRA_ENV_VARS under set -u" {
-    run bash -c '
-        set -euo pipefail
-        source "$1"
-        TEST_ENV=() APP_ENV=testing
-        WORKTREE_EXTRA_ENV_VARS= append_testing_env_args
-        echo "${TEST_ENV[*]}"
-    ' _ "$BATS_TEST_DIRNAME/../../stubs/bin/_worktree-lib.sh"
-    [ "$status" -eq 0 ]
-    [ "$output" = "-e APP_ENV=testing" ]
-}
+@test "env_file_keys lists each assigned key once" {
+    file="$BATS_TEST_TMPDIR/.env.testing"
+    printf '%s\n' '# COMMENTED=1' 'APP_ENV=testing' 'export DB_HOST=mysql' 'not an assignment' 'APP_ENV=again' > "$file"
 
-@test "append_testing_env_args passes WORKTREE_EXTRA_ENV_VARS through" {
-    TEST_ENV=()
-    FOO=1 BAR=two WORKTREE_EXTRA_ENV_VARS="FOO BAR" append_testing_env_args
-    [ "${TEST_ENV[*]}" = "-e FOO=1 -e BAR=two" ]
+    [ "$(env_file_keys "$file" | tr '\n' ' ')" = "APP_ENV DB_HOST " ]
+    [ -z "$(env_file_keys "$BATS_TEST_TMPDIR/missing")" ]
 }
 
 @test "env_file_value parses quotes, export, comments and CRLF without evaluating" {
