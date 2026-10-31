@@ -57,3 +57,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y bats
 
       - run: bats tests/bats
+
+      - name: Shellcheck
+        run: shellcheck -S warning stubs/bin/worktree stubs/bin/worktree-install stubs/bin/worktree-setup stubs/bin/test stubs/bin/_worktree-lib.sh stubs/githooks/*.sh

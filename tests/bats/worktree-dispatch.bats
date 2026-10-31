@@ -19,13 +19,13 @@ setup() {
     LOG="$BATS_TEST_TMPDIR/calls.log"
     : > "$LOG"
 
-    for name in worktree-setup test; do
+    for name in worktree-install worktree-setup test; do
         cat > "$DISPATCH_DIR/$name" <<SCRIPT
 #!/usr/bin/env bash
 echo "$name \$*" >> "$LOG"
 SCRIPT
     done
-    for name in worktree-install worktree-clean; do
+    for name in worktree-clean; do
         cat > "$DISPATCH_DIR/$name" <<SCRIPT
 #!/usr/bin/env php
 <?php

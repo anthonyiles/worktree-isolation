@@ -12,8 +12,8 @@ It works with native PHP (Herd, Valet), Docker Compose, Laravel Sail or any Dock
 
 ## Requirements
 
-- PHP 8.2+
-- Git 2.54+
+- PHP 8.2+ where your app runs (in the container for Docker setups)
+- Bash and Git 2.54+ on the host
 - MySQL or MariaDB, for per-worktree databases (SQLite needs nothing extra)
 
 ## Install

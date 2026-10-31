@@ -24,7 +24,7 @@ class InstallCommand extends Command
     public function handle(): int
     {
         $args = [
-            PHP_BINARY,
+            'bash',
             dirname(__DIR__, 2).'/stubs/bin/worktree-install',
             '--project-dir='.base_path(),
             '--stubs-dir='.dirname(__DIR__, 2).'/stubs',
