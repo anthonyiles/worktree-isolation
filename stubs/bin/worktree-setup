@@ -95,8 +95,8 @@ ENV_PATH="$PROJECT_ROOT/.env"
 TEST_DB_PER_WORKTREE=false
 if [[ -f "$TESTING_ENV_PATH" ]] && is_mysql_connection "$TESTING_ENV_PATH"; then
     TEST_DB_PER_WORKTREE=true
-    set_env_file_value "$TESTING_ENV_PATH" "$DB_PER_WORKTREE_KEY" true
-    echo "Enabled ${DB_PER_WORKTREE_KEY}=true for this worktree."
+    set_env_file_value "$TESTING_ENV_PATH" TEST_DB_PER_WORKTREE true
+    echo "Enabled TEST_DB_PER_WORKTREE=true for this worktree."
 fi
 
 # ---------------------------------------------------------------------------

@@ -51,10 +51,9 @@ config_file() {
 common_settings() {
     cat <<'ENV'
 
-# Common settings
-WORKTREE_TESTING_ENV_FILE=.env.testing
-WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
-WORKTREE_DB_PER_WORKTREE_KEY=TEST_DB_PER_WORKTREE
+# Testing env file copied into each worktree, and its fallback
+# WORKTREE_TESTING_ENV_FILE=.env.testing
+# WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
 
 # Additional env vars to pass to the test container (space-separated, docker-image only)
 # WORKTREE_EXTRA_ENV_VARS=
