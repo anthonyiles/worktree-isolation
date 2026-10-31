@@ -234,11 +234,25 @@ if [[ "$DEV_DB_PER_WORKTREE" =~ ^(true|1)$ && -f "$ENV_PATH" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Install npm dependencies
+# 7. Install JavaScript dependencies
 # ---------------------------------------------------------------------------
-echo ""
-echo "Installing npm dependencies..."
-run_in_runtime npm install --no-progress
+# A new worktree has no node_modules, so Vite and the like can't build
+# without this. Skipped for projects without a package.json, and only warns
+# on failure (e.g. no Node in the runtime image).
+if [[ -f "$PROJECT_ROOT/package.json" ]]; then
+    if [[ -f "$PROJECT_ROOT/pnpm-lock.yaml" ]]; then
+        JS_INSTALL=(pnpm install)
+    elif [[ -f "$PROJECT_ROOT/yarn.lock" ]]; then
+        JS_INSTALL=(yarn install)
+    elif [[ -f "$PROJECT_ROOT/bun.lock" || -f "$PROJECT_ROOT/bun.lockb" ]]; then
+        JS_INSTALL=(bun install)
+    else
+        JS_INSTALL=(npm install --no-progress)
+    fi
+    echo ""
+    echo "Installing JavaScript dependencies (${JS_INSTALL[0]})..."
+    run_in_runtime "${JS_INSTALL[@]}" || echo "Warning: ${JS_INSTALL[*]} failed; run it with vendor/bin/worktree ${JS_INSTALL[*]}" >&2
+fi
 
 # ---------------------------------------------------------------------------
 # Done
