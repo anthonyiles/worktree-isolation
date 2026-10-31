@@ -21,8 +21,10 @@ declare(strict_types=1);
 
 use WorktreeIsolation\DevDatabaseResolver;
 use WorktreeIsolation\TestDatabaseResolver;
+use WorktreeIsolation\WorktreeDatabaseResolver;
 
 // Loaded directly: this script runs without the package autoloader.
+require_once __DIR__ . '/../../src/WorktreeDatabaseResolver.php';
 require_once __DIR__ . '/../../src/TestDatabaseResolver.php';
 require_once __DIR__ . '/../../src/DevDatabaseResolver.php';
 
@@ -243,7 +245,7 @@ function target(string $label, string $resolver, string $base, string $file, arr
         'base' => $base,
         'file' => $file,
         'env' => $env,
-        'pattern' => escapeLike($base . DevDatabaseResolver::MARKER) . '%',
+        'pattern' => escapeLike($base . WorktreeDatabaseResolver::MARKER) . '%',
     ];
 }
 
@@ -252,7 +254,7 @@ function target(string $label, string $resolver, string $base, string $file, arr
  */
 function databaseBase(array $env): string
 {
-    return explode(DevDatabaseResolver::MARKER, $env['DB_DATABASE'] ?? '', 2)[0];
+    return explode(WorktreeDatabaseResolver::MARKER, $env['DB_DATABASE'] ?? '', 2)[0];
 }
 
 /**
@@ -280,7 +282,7 @@ function liveWorktreeBasenames(string $mainDir): ?array
 }
 
 /**
- * @param  class-string<TestDatabaseResolver|DevDatabaseResolver>  $resolver
+ * @param  class-string<WorktreeDatabaseResolver>  $resolver
  * @param  list<string>  $worktrees
  * @return list<string>
  */
