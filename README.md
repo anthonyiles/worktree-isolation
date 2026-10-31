@@ -12,7 +12,7 @@ It works with native PHP (Herd, Valet), Docker Compose, Laravel Sail or any Dock
 
 ## Requirements
 
-- PHP 8.2+ wherever your app runs: on the host for native PHP, inside the container for Sail and Docker. `vendor/bin/worktree` itself is bash, so Docker setups need no PHP on the host.
+- PHP 8.2+ where your app runs (in the container for Docker setups)
 - Bash and Git 2.54+ on the host
 - MySQL or MariaDB, for per-worktree databases (SQLite needs nothing extra)
 
@@ -23,9 +23,7 @@ composer require anthonyiles/worktree-isolation --dev
 vendor/bin/worktree install
 ```
 
-No PHP on the host? Run the `composer require` through your container (e.g. `sail composer require anthonyiles/worktree-isolation --dev`).
-
-Run `install` on the host, not inside Sail; it only needs bash and git. It writes `.worktree-isolation.env` (commit it) and registers a git hook for this clone. Each teammate runs `vendor/bin/worktree install` once per clone; it keeps the committed config and just registers the hook, which then works for worktrees of any branch.
+Run `install` on the host, not inside Sail. It writes `.worktree-isolation.env` (commit it) and registers a git hook for this clone. Each teammate runs `vendor/bin/worktree install` once per clone; it keeps the committed config and just registers the hook, which then works for worktrees of any branch.
 
 Pick the runtime that matches how you run PHP:
 
