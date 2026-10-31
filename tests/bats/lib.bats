@@ -122,3 +122,38 @@ setup() {
     FOO=1 BAR=two WORKTREE_EXTRA_ENV_VARS="FOO BAR" append_testing_env_args
     [ "${TEST_ENV[*]}" = "-e FOO=1 -e BAR=two" ]
 }
+
+@test "env_file_value parses quotes, export, comments and CRLF without evaluating" {
+    file="$BATS_TEST_TMPDIR/.env"
+    printf '%s\n' \
+        'APP_NAME=My App # trailing comment' \
+        'export DB_HOST = mysql' \
+        'DB_PASSWORD="p@ss #not a comment"' \
+        "DB_USERNAME='\$(touch $BATS_TEST_TMPDIR/pwned)'" \
+        'DB_PORT=3307' > "$file"
+    printf 'DB_DATABASE=crlf\r\n' >> "$file"
+
+    [ "$(env_file_value "$file" APP_NAME)" = "My App" ]
+    [ "$(env_file_value "$file" DB_HOST)" = "mysql" ]
+    [ "$(env_file_value "$file" DB_PASSWORD)" = "p@ss #not a comment" ]
+    [ "$(env_file_value "$file" DB_USERNAME)" = "\$(touch $BATS_TEST_TMPDIR/pwned)" ]
+    [ "$(env_file_value "$file" DB_DATABASE)" = "crlf" ]
+    [ "$(env_file_value "$file" MISSING)" = "" ]
+    [ ! -e "$BATS_TEST_TMPDIR/pwned" ]
+}
+
+@test "load_env_file exports values without running them" {
+    file="$BATS_TEST_TMPDIR/.env.testing"
+    printf '%s\n' \
+        'APP_NAME=My App' \
+        "DB_PASSWORD=\`touch $BATS_TEST_TMPDIR/pwned\`" \
+        '# DB_HOST=commented' > "$file"
+
+    load_env_file "$file"
+
+    [ "$APP_NAME" = "My App" ]
+    [ "$DB_PASSWORD" = "\`touch $BATS_TEST_TMPDIR/pwned\`" ]
+    [ -z "${DB_HOST:-}" ]
+    [ ! -e "$BATS_TEST_TMPDIR/pwned" ]
+    [ "$(bash -c 'echo "$APP_NAME"')" = "My App" ]
+}

@@ -8,13 +8,7 @@ load_worktree_config() {
     PROJECT_ROOT="$(git rev-parse --show-toplevel)"
     WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
 
-    local conf_file="$PROJECT_ROOT/.worktree-isolation.env"
-    if [[ -f "$conf_file" ]]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$conf_file"
-        set +a
-    fi
+    load_env_file "$PROJECT_ROOT/.worktree-isolation.env"
 
     RUNTIME="${WORKTREE_RUNTIME:-native}"
     TESTING_ENV_FILE="${WORKTREE_TESTING_ENV_FILE:-.env.testing}"
@@ -268,17 +262,55 @@ run_in_runtime() {
     esac
 }
 
-# Reads KEY's value from a dotenv file without sourcing it (.env files aren't
-# guaranteed to be valid shell).
+# Dotenv values are parsed, never sourced: .env files aren't guaranteed to be
+# valid shell (e.g. APP_NAME=My App), and sourcing would expand $ and
+# backticks. A quoted value is taken verbatim up to its closing quote; an
+# unquoted one loses a trailing " # comment" and surrounding whitespace.
+# Matches parseEnvFile() in worktree-clean.
+parse_env_value() {
+    local value="$1"
+    value="${value%$'\r'}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    case "$value" in
+        \"*)
+            value="${value#\"}"
+            value="${value%%\"*}"
+            ;;
+        \'*)
+            value="${value#\'}"
+            value="${value%%\'*}"
+            ;;
+        *)
+            value="${value%%[[:space:]]#*}"
+            value="${value%"${value##*[![:space:]]}"}"
+            ;;
+    esac
+    printf '%s\n' "$value"
+}
+
+ENV_LINE_PATTERN='^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$'
+
+# Reads KEY's value from a dotenv file (the last assignment wins).
 env_file_value() {
-    local file="$1" key="$2" value
-    value="$(grep -E "^${key}=" "$file" 2> /dev/null | tail -n 1)" || return 0
-    value="${value#*=}"
-    value="${value%\"}"
-    value="${value#\"}"
-    value="${value%\'}"
-    value="${value#\'}"
+    local file="$1" key="$2" line value=""
+    [[ -f "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ $ENV_LINE_PATTERN && "${BASH_REMATCH[2]}" == "$key" ]]; then
+            value="$(parse_env_value "${BASH_REMATCH[3]}")"
+        fi
+    done < "$file"
     echo "$value"
+}
+
+# Exports every assignment in a dotenv file.
+load_env_file() {
+    local line
+    [[ -f "$1" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ $ENV_LINE_PATTERN ]]; then
+            export "${BASH_REMATCH[2]}=$(parse_env_value "${BASH_REMATCH[3]}")"
+        fi
+    done < "$1"
 }
 
 # The value goes through ENVIRON rather than a sed expression, so it's never
