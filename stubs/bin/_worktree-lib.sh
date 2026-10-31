@@ -162,6 +162,7 @@ derive_test_database_name() {
 # (defaults to the test resolver), WORKTREE_BASENAME, MAIN_DB_DATABASE and
 # DB_* in its environment, and prints "<name> created|existing" as its last line; the
 # leading newline keeps that line intact if PHP emitted a notice first.
+# shellcheck disable=SC2016 # PHP code, expanded by PHP
 ENSURE_DB_PHP='
     require "vendor/autoload.php";
     $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
