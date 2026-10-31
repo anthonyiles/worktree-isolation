@@ -52,3 +52,40 @@ run_clean() {
     [[ "$output" == *"Could not list this repository's worktrees"* ]]
     [[ "$output" != *"Dropped"* ]]
 }
+
+@test "rejects an unknown option instead of ignoring it" {
+    printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=testing\n' > "$PROJECT_DIR/.env.testing"
+
+    run php "$STUBS_DIR/worktree-clean" --project-dir="$PROJECT_DIR" --stael --force
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Unknown option '--stael'"* ]]
+    [[ "$output" == *"Usage: vendor/bin/worktree clean"* ]]
+    [[ "$output" != *"Could not connect"* ]]
+}
+
+@test "takes --project-dir's value as a separate argument" {
+    run php "$STUBS_DIR/worktree-clean" --project-dir "$PROJECT_DIR" --force
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Could not connect to the development database server"* ]]
+}
+
+@test "fails without .worktree-isolation.env" {
+    rm "$PROJECT_DIR/.worktree-isolation.env"
+
+    run run_clean
+    [ "$status" -eq 1 ]
+    [[ "$output" == *".worktree-isolation.env not found"* ]]
+    [[ "$output" != *"Could not connect"* ]]
+}
+
+@test "takes database names from the main checkout, not the worktree" {
+    git -C "$PROJECT_DIR" -c user.email=test@example.com -c user.name=Test commit -q --allow-empty -m init
+    worktree="$BATS_TEST_TMPDIR/worktrees/feature"
+    git -C "$PROJECT_DIR" worktree add -q -b feature "$worktree"
+    cp "$PROJECT_DIR/.worktree-isolation.env" "$worktree/"
+    printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=testing_wt_feature\n' > "$worktree/.env.testing"
+
+    run php "$STUBS_DIR/worktree-clean" --project-dir="$worktree" --force
+    [[ "$output" == *"development database server"* ]]
+    [[ "$output" != *"test database server"* ]]
+}
