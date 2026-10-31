@@ -165,8 +165,9 @@ install_stubs_in_vendor() {
 
 @test "runs clean directly when already inside Sail" {
     install_stubs_in_vendor "$WORKTREE_DIR"
-    # Port 1 refuses connections, so no database server is needed.
-    printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=testing\n' > "$WORKTREE_DIR/.env.testing"
+    # Port 1 refuses connections, so no database server is needed. Clean
+    # takes the database settings from the main checkout.
+    printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=testing\n' > "$MAIN_REPO/.env.testing"
 
     LARAVEL_SAIL=1 run bash "$VENDOR_BIN/worktree" clean --force
 

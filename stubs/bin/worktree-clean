@@ -26,23 +26,10 @@ use WorktreeIsolation\TestDatabaseResolver;
 require_once __DIR__ . '/../../src/TestDatabaseResolver.php';
 require_once __DIR__ . '/../../src/DevDatabaseResolver.php';
 
-$opts = getopt('', ['force', 'stale', 'project-dir:', 'help']);
+$opts = parseOptions(array_slice($argv, 1));
 
 if (isset($opts['help'])) {
-    fwrite(STDOUT, <<<HELP
-    Usage: vendor/bin/worktree clean [OPTIONS]
-
-    Drops all per-worktree test databases ("{base}_wt_*", from .env.testing)
-    and development databases ("{base}_wt_*", from .env). The main
-    checkout's own databases are never dropped.
-
-    Options:
-      --force            Drop databases without confirmation
-      --stale            Only drop databases whose worktree no longer exists
-      --project-dir=PATH Project root (default: auto-detected)
-      --help             Show this help
-
-    HELP);
+    fwrite(STDOUT, usage());
     exit(0);
 }
 
@@ -50,9 +37,16 @@ $force = isset($opts['force']);
 $stale = isset($opts['stale']);
 $projectDir = $opts['project-dir'] ?? resolveProjectRoot();
 
+$configFile = "$projectDir/.worktree-isolation.env";
+if (! file_exists($configFile)) {
+    fwrite(STDERR, "Error: $configFile not found. Run vendor/bin/worktree install first.\n");
+    exit(1);
+}
+$conf = parseEnvFile($configFile);
+
 $mainDir = mainCheckoutDir($projectDir);
-$targets = cleanupTargets($projectDir, $mainDir);
-$protected = protectedDatabases($mainDir);
+$targets = cleanupTargets($conf, $mainDir);
+$protected = protectedDatabases($conf, $mainDir);
 
 if ($stale) {
     $worktrees = liveWorktreeBasenames($mainDir);
@@ -139,6 +133,55 @@ exit($exitCode);
 // Functions
 // ---------------------------------------------------------------------------
 
+function usage(): string
+{
+    return <<<'HELP'
+    Usage: vendor/bin/worktree clean [OPTIONS]
+
+    Drops all per-worktree test databases ("{base}_wt_*", from .env.testing)
+    and development databases ("{base}_wt_*", from .env). The main
+    checkout's own databases are never dropped.
+
+    Options:
+      --force            Drop databases without confirmation
+      --stale            Only drop databases whose worktree no longer exists
+      --project-dir=PATH Project root (default: auto-detected)
+      --help             Show this help
+
+    HELP;
+}
+
+/**
+ * Unlike getopt(), rejects anything it doesn't know: a mistyped --stale
+ * must not leave a bare --force dropping every database.
+ *
+ * @param  list<string>  $args
+ * @return array<string, string|true>
+ */
+function parseOptions(array $args): array
+{
+    $opts = [];
+    while ($args !== []) {
+        $arg = array_shift($args);
+        if (in_array($arg, ['--force', '--stale', '--help'], true)) {
+            $opts[substr($arg, 2)] = true;
+        } elseif (str_starts_with($arg, '--project-dir=')) {
+            $opts['project-dir'] = substr($arg, strlen('--project-dir='));
+        } elseif ($arg === '--project-dir') {
+            if ($args === []) {
+                fwrite(STDERR, "Error: --project-dir requires a value.\n");
+                exit(1);
+            }
+            $opts['project-dir'] = array_shift($args);
+        } else {
+            fwrite(STDERR, "Error: Unknown option '$arg'.\n\n" . usage());
+            exit(1);
+        }
+    }
+
+    return $opts;
+}
+
 function resolveProjectRoot(): string
 {
     // This script runs from inside vendor/, not the project root —
@@ -161,47 +204,55 @@ function mainCheckoutDir(string $projectDir): string
  * Bases come from the main checkout's env files, which hold the plain names
  * every worktree's are derived from.
  *
- * @return list<array{label: string, file: string, env: array<string, string>, pattern: string}>
+ * @param  array<string, string>  $conf
+ * @return list<array{label: string, resolver: class-string, base: string, file: string, env: array<string, string>, pattern: string}>
  */
-function cleanupTargets(string $projectDir, string $mainDir): array
+function cleanupTargets(array $conf, string $mainDir): array
 {
-    $conf = parseEnvFile("$projectDir/.worktree-isolation.env");
-
     $targets = [];
 
     // Same lookup order as main_test_database() in _worktree-lib.sh.
     $testingFile = $conf['WORKTREE_TESTING_ENV_FILE'] ?? '.env.testing';
     $testingExample = $conf['WORKTREE_TESTING_ENV_EXAMPLE'] ?? '.env.testing.example';
-    $testingEnv = parseEnvFile("$mainDir/$testingFile")
-        ?: parseEnvFile("$mainDir/$testingExample")
-        ?: parseEnvFile("$projectDir/$testingFile");
-    $testBase = explode(DevDatabaseResolver::MARKER, $testingEnv['DB_DATABASE'] ?? '', 2)[0] ?: 'testing';
+    $testingEnv = parseEnvFile("$mainDir/$testingFile") ?: parseEnvFile("$mainDir/$testingExample");
+    $testBase = databaseBase($testingEnv) ?: 'testing';
     if (isMysqlConnection($testingEnv)) {
-        $targets[] = [
-            'label' => 'test',
-            'resolver' => TestDatabaseResolver::class,
-            'base' => $testBase,
-            'file' => $testingFile,
-            'env' => $testingEnv,
-            'pattern' => escapeLike($testBase . DevDatabaseResolver::MARKER) . '%',
-        ];
+        $targets[] = target('test', TestDatabaseResolver::class, $testBase, $testingFile, $testingEnv);
     }
 
     $devEnabled = in_array($conf['WORKTREE_DEV_DB_PER_WORKTREE'] ?? 'false', ['true', '1'], true);
-    $devEnv = parseEnvFile("$mainDir/.env") ?: parseEnvFile("$projectDir/.env");
-    $devBase = explode(DevDatabaseResolver::MARKER, $devEnv['DB_DATABASE'] ?? '', 2)[0];
+    $devEnv = parseEnvFile("$mainDir/.env");
+    $devBase = databaseBase($devEnv);
     if ($devEnabled && $devBase !== '' && isMysqlConnection($devEnv)) {
-        $targets[] = [
-            'label' => 'development',
-            'resolver' => DevDatabaseResolver::class,
-            'base' => $devBase,
-            'file' => '.env',
-            'env' => $devEnv,
-            'pattern' => escapeLike($devBase . DevDatabaseResolver::MARKER) . '%',
-        ];
+        $targets[] = target('development', DevDatabaseResolver::class, $devBase, '.env', $devEnv);
     }
 
     return $targets;
+}
+
+/**
+ * @param  class-string  $resolver
+ * @param  array<string, string>  $env
+ * @return array{label: string, resolver: class-string, base: string, file: string, env: array<string, string>, pattern: string}
+ */
+function target(string $label, string $resolver, string $base, string $file, array $env): array
+{
+    return [
+        'label' => $label,
+        'resolver' => $resolver,
+        'base' => $base,
+        'file' => $file,
+        'env' => $env,
+        'pattern' => escapeLike($base . DevDatabaseResolver::MARKER) . '%',
+    ];
+}
+
+/**
+ * @param  array<string, string>  $env
+ */
+function databaseBase(array $env): string
+{
+    return explode(DevDatabaseResolver::MARKER, $env['DB_DATABASE'] ?? '', 2)[0];
 }
 
 /**
@@ -248,11 +299,11 @@ function inUseDatabases(string $resolver, string $base, array $worktrees): array
 }
 
 /**
+ * @param  array<string, string>  $conf
  * @return list<string>
  */
-function protectedDatabases(string $mainDir): array
+function protectedDatabases(array $conf, string $mainDir): array
 {
-    $conf = parseEnvFile("$mainDir/.worktree-isolation.env");
     $files = ['.env', $conf['WORKTREE_TESTING_ENV_FILE'] ?? '.env.testing', $conf['WORKTREE_TESTING_ENV_EXAMPLE'] ?? '.env.testing.example'];
 
     return array_values(array_filter(array_map(
