@@ -52,3 +52,18 @@ ENV
     run grep -c -- "run --rm -u $(id -u):$(id -g) -e HOME=/tmp " "$DOCKER_LOG"
     [ "$output" -eq 2 ]
 }
+
+@test "test passes credentials by name, keeping their values off the command line" {
+    log_docker_argv
+    echo "DB_PASSWORD=s3cret" >> "$WORKTREE_DIR/.env.testing"
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 0 ]
+
+    run grep -F -- "[-e] [DB_PASSWORD]" "$DOCKER_ARGV_LOG"
+    [ "$status" -eq 0 ]
+    run grep -c -- "s3cret" "$DOCKER_ARGV_LOG"
+    [ "$output" -eq 0 ]
+    run grep -- "-e DB_PASSWORD=s3cret" "$DOCKER_LOG"
+    [ "$status" -eq 0 ]
+}
