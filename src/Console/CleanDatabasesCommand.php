@@ -5,38 +5,30 @@ declare(strict_types=1);
 namespace WorktreeIsolation\Console;
 
 use Illuminate\Console\Command;
-use Symfony\Component\Process\Process;
 
 class CleanDatabasesCommand extends Command
 {
+    use RunsStubScript;
+
     protected $signature = 'worktree:clean
         {--force : Drop databases without confirmation}
         {--stale : Only drop databases whose worktree no longer exists}';
 
-    protected $description = 'Drop all per-worktree test databases';
+    protected $description = 'Drop per-worktree test and development databases';
 
     public function handle(): int
     {
+        $args = ['clean'];
+
+        foreach (['force', 'stale'] as $flag) {
+            if ($this->option($flag)) {
+                $args[] = "--$flag";
+            }
+        }
+
         // Through vendor/bin/worktree, so the Docker runtimes run clean in
-        // their container, where DB_HOST (e.g. "mysql") resolves.
-        $args = ['bash', dirname(__DIR__, 2).'/stubs/bin/worktree', 'clean'];
-
-        if ($this->option('force')) {
-            $args[] = '--force';
-        }
-
-        if ($this->option('stale')) {
-            $args[] = '--stale';
-        }
-
-        $process = new Process($args, base_path());
-        $process->setTimeout(60);
-        $process->setTty(Process::isTtySupported());
-
-        $process->run(function (string $type, string $buffer): void {
-            $this->output->write($buffer);
-        });
-
-        return $process->isSuccessful() ? self::SUCCESS : self::FAILURE;
+        // their container, where DB_HOST (e.g. "mysql") resolves. A TTY lets
+        // the confirmation prompt read the answer.
+        return $this->runStub('worktree', $args, timeout: 60, tty: true);
     }
 }
