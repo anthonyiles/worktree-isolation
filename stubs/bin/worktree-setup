@@ -150,14 +150,13 @@ run_in_runtime composer install --no-interaction --no-progress
 # ---------------------------------------------------------------------------
 # 6. Per-worktree databases
 # ---------------------------------------------------------------------------
+# Usage: ensure_worktree_database ENV_FILE NAME MAIN_DB
 # Prints "<name> created|existing".
 ensure_worktree_database() {
-    local env_file="$1" resolver="$2" base_db="$3" main_db="$4" output
+    local env_file="$1" name="$2" main_db="$3" output
     output="$(run_in_runtime \
-        -e "RESOLVER_CLASS=$resolver" \
-        -e "WORKTREE_BASENAME=$WORKTREE_BASENAME" \
         -e "MAIN_DB_DATABASE=$main_db" \
-        -e "DB_DATABASE=$base_db" \
+        -e "DB_DATABASE=$name" \
         -e "DB_HOST=$(env_file_value "$env_file" DB_HOST)" \
         -e "DB_PORT=$(env_file_value "$env_file" DB_PORT)" \
         -e "DB_USERNAME=$(env_file_value "$env_file" DB_USERNAME)" \
@@ -195,7 +194,7 @@ if [[ "$TEST_DB_PER_WORKTREE" == true ]]; then
         echo "  DB_DATABASE is left blank in $TESTING_ENV_FILE; fix it and re-run vendor/bin/worktree setup." >&2
     # A DB failure here (MySQL down, bad creds, missing driver) must not abort
     # setup; vendor/bin/worktree test creates the database on first run.
-    elif $ENSURE_DB "$TESTING_ENV_PATH" 'WorktreeIsolation\TestDatabaseResolver' "$TEST_DB" "$MAIN_TEST_DB" > /dev/null; then
+    elif $ENSURE_DB "$TESTING_ENV_PATH" "$TEST_DB" "$MAIN_TEST_DB" > /dev/null; then
         echo "Using DB_DATABASE=$TEST_DB in $TESTING_ENV_FILE"
     else
         echo "Warning: Could not create the test database '$TEST_DB' — check DB_* settings in $TESTING_ENV_FILE." >&2
@@ -213,7 +212,7 @@ if [[ "$DEV_DB_PER_WORKTREE" =~ ^(true|1)$ && -f "$ENV_PATH" ]]; then
     elif [[ -z "$DEV_DB" ]]; then
         echo "Warning: Could not derive a development database name from the main checkout's DB_DATABASE." >&2
         echo "  DB_DATABASE is left blank in .env; set it and re-run vendor/bin/worktree setup." >&2
-    elif result="$($ENSURE_DB "$ENV_PATH" 'WorktreeIsolation\DevDatabaseResolver' "$DEV_DB" "$MAIN_DEV_DB")"; then
+    elif result="$($ENSURE_DB "$ENV_PATH" "$DEV_DB" "$MAIN_DEV_DB")"; then
         echo "Using DB_DATABASE=$DEV_DB in .env"
 
         if [[ -n "$DEV_DB_MIGRATE_COMMAND" ]]; then

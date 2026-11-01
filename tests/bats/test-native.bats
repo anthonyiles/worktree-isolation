@@ -35,16 +35,18 @@ SCRIPT
     [ ! -e /tmp/.test_db_name ]
 }
 
-@test "fails instead of running tests when the resolver output is unusable" {
+@test "shows PHP's error and runs no tests when the test database can't be created" {
     cat > "$FAKE_BIN/php" <<'SCRIPT'
 #!/usr/bin/env bash
-echo "PHP Warning: something went wrong"
+echo "PHP Fatal error: Uncaught PDOException: could not find driver"
+exit 255
 SCRIPT
 
     run bash "$STUBS_DIR/test"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"could not derive the per-worktree test database"* ]]
-    [ "${lines[${#lines[@]}-1]}" != "testing" ]
+    [[ "$output" == *"could not find driver"* ]]
+    [[ "$output" == *"could not create the test database testing_wt_feature-auth"* ]]
+    [[ "$output" != *$'\ntesting_wt_feature-auth'* ]]
 }
 
 @test "refuses the main checkout's test database when per-worktree databases are off" {

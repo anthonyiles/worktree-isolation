@@ -57,18 +57,17 @@ load_env_file "$PROJECT_ROOT/$TESTING_ENV_FILE"
 # ---------------------------------------------------------------------------
 # 3. Run tests
 # ---------------------------------------------------------------------------
-# Runs inside the target runtime. With ENSURE_DB_PHP set, it first derives and
-# creates this worktree's test database and points DB_DATABASE at it.
+# Runs inside the target runtime. With ENSURE_DB_PHP set, it first creates
+# this worktree's test database (DB_DATABASE) if it's missing. PHP's output
+# is only shown on failure, since the CLI prints errors to stdout.
 # shellcheck disable=SC2016 # expanded by the inner shell
 RUN_TESTS='
-    set -o pipefail
     if [[ -n "${ENSURE_DB_PHP:-}" ]]; then
-        result="$(php -r "$ENSURE_DB_PHP" | tail -n 1)" || exit
-        if [[ ! "$result" =~ ^[a-z0-9_-]+\ (created|existing)$ ]]; then
-            echo "Error: could not derive the per-worktree test database." >&2
+        if ! output="$(php -r "$ENSURE_DB_PHP" 2>&1)"; then
+            printf "%s\n" "$output" >&2
+            echo "Error: could not create the test database $DB_DATABASE." >&2
             exit 1
         fi
-        export DB_DATABASE="${result%% *}"
         echo "Using test database: $DB_DATABASE"
     fi
     # eval, so quotes in WORKTREE_TEST_COMMAND group arguments as in a shell.
@@ -88,7 +87,6 @@ if [[ "${TEST_DB_PER_WORKTREE:-}" =~ ^(true|1)$ && "${DB_CONNECTION:-}" =~ ^(mys
     fi
     TEST_ENV+=(
         -e "ENSURE_DB_PHP=$ENSURE_DB_PHP"
-        -e "WORKTREE_BASENAME=$WORKTREE_BASENAME"
         -e "MAIN_DB_DATABASE=$MAIN_TEST_DB"
     )
     for var in DB_DATABASE DB_HOST DB_PORT DB_USERNAME DB_PASSWORD; do

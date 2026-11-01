@@ -104,13 +104,14 @@ main_test_database() {
     echo "$name"
 }
 
-# Same sanitization as TestDatabaseResolver::worktreeSuffix(), and what
+# Same sanitization as WorktreeDatabaseResolver::worktreeSuffix(), and what
 # worktree-install applies to the compose project base: lowercase, collapse
 # anything outside [a-z0-9] into a single hyphen, trim leading/trailing
-# hyphens.
+# hyphens. LC_ALL=C works on bytes like PHP: in a UTF-8 locale, tr and sed
+# would keep letters like "ë".
 slugify() {
     local slug
-    slug="$(echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
+    slug="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
     echo "${slug:-worktree}"
 }
 
@@ -126,11 +127,13 @@ sha1_hex() {
     fi
 }
 
-# Must match DevDatabaseResolver::derive() and TestDatabaseResolver::derive().
-# Setup writes these names before the stack starts, so they can't wait for
-# PHP inside the runtime. An overlong suffix is truncated and tagged with a
-# hash of the full suffix, as in TestDatabaseResolver::fit().
+# Must match WorktreeDatabaseResolver::derive(), which clean --stale uses.
+# Setup and test derive names here, before the stack starts, and PHP only
+# creates them. An overlong suffix is truncated and tagged with a hash of the
+# full suffix, as in WorktreeDatabaseResolver::fit(). Lengths count bytes,
+# like PHP's strlen().
 derive_worktree_database_name() {
+    local LC_ALL=C
     local base="${1%%_wt_*}" suffix hash room
     [[ -n "$base" ]] || return 1
     suffix="$(slugify "$2")"
@@ -153,32 +156,37 @@ derive_dev_database_name() {
 # must not make a non-test base pass.
 derive_test_database_name() {
     local base="${1%%_wt_*}"
-    [[ "$(echo "$base" | tr '[:upper:]' '[:lower:]')" == *test* ]] || return 1
+    [[ "$(printf '%s' "$base" | LC_ALL=C tr '[:upper:]' '[:lower:]')" == *test* ]] || return 1
     derive_worktree_database_name "$base" "$2" 40
 }
 
-# Creates a per-worktree database, re-deriving its name with the PHP
-# resolver as a cross-check. Runs from the project root with RESOLVER_CLASS
-# (defaults to the test resolver), WORKTREE_BASENAME, MAIN_DB_DATABASE and
-# DB_* in its environment, and prints "<name> created|existing" as its last line; the
+# Creates the per-worktree database named by DB_DATABASE, which bash already
+# derived. Refuses anything that isn't a per-worktree name or is the main
+# checkout's. Runs from the project root with DB_* and MAIN_DB_DATABASE in
+# its environment, and prints "<name> created|existing" as its last line; the
 # leading newline keeps that line intact if PHP emitted a notice first.
+# The autoloader is the worktree's, which may hold an older release of this
+# package, so only use what every release has.
 # shellcheck disable=SC2016 # PHP code, expanded by PHP
 ENSURE_DB_PHP='
     require "vendor/autoload.php";
-    $class = getenv("RESOLVER_CLASS") ?: "WorktreeIsolation\\TestDatabaseResolver";
-    $name = $class::derive(getenv("DB_DATABASE") ?: "testing", getenv("WORKTREE_BASENAME") ?: "worktree");
+    $name = (string) getenv("DB_DATABASE");
+    if (! str_contains($name, "_wt_")) {
+        fwrite(STDERR, "Refusing to create \"$name\": not a per-worktree database name.\n");
+        exit(1);
+    }
     if ($name === getenv("MAIN_DB_DATABASE")) {
         fwrite(STDERR, "Refusing to use $name: it is the main checkout database.\n");
         exit(1);
     }
-    $created = $class::ensureExists(
+    $created = WorktreeIsolation\TestDatabaseResolver::ensureExists(
         $name,
         getenv("DB_HOST") ?: "127.0.0.1",
         (int) (getenv("DB_PORT") ?: 3306),
         getenv("DB_USERNAME") ?: "",
         getenv("DB_PASSWORD") ?: "",
     );
-    echo "\n", $name, $created === true ? " created" : " existing";
+    echo "\n", $name, $created ? " created" : " existing";
 '
 
 # Validates ENSURE_DB_PHP's output and prints its last line.
