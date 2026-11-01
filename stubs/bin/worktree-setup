@@ -17,49 +17,31 @@
 # itself exposed as a Composer bin.
 set -euo pipefail
 
-# This file can still be invoked through a symlink (bats' "resolves
-# _worktree-lib.sh when invoked through a symlink" test does this), so keep
-# resolving one defensively even though vendor/bin/worktree calls it by a
-# direct, non-symlinked path. readlink -f isn't portable (no -f on macOS's
-# stock readlink), so resolve it manually.
-resolve_script_dir() {
-    local src="${BASH_SOURCE[0]}"
-    while [[ -h "$src" ]]; do
-        local dir
-        dir="$(cd -P "$(dirname "$src")" && pwd)"
-        src="$(readlink "$src")"
-        [[ "$src" != /* ]] && src="$dir/$src"
-    done
-    cd -P "$(dirname "$src")" && pwd
-}
-SCRIPT_DIR="$(resolve_script_dir)"
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/_worktree-lib.sh"
 
 # ---------------------------------------------------------------------------
 # 0. Load configuration
 # ---------------------------------------------------------------------------
-load_worktree_config
-# Off unless configured, so upgrading doesn't start rewriting .env for
-# projects installed before this existed; install writes it as true.
-DEV_DB_PER_WORKTREE="${WORKTREE_DEV_DB_PER_WORKTREE:-false}"
+load_worktree_config --skip-if-missing
 DEV_DB_MIGRATE_COMMAND="${WORKTREE_DEV_DB_MIGRATE_COMMAND-php artisan migrate --no-interaction}"
 DEV_DB_SEED_COMMAND="${WORKTREE_DEV_DB_SEED_COMMAND-php artisan db:seed --no-interaction}"
 DB_WAIT_SECONDS="${WORKTREE_DB_WAIT_SECONDS:-30}"
 
 # ---------------------------------------------------------------------------
-# 1. Validate runtime and prerequisites
-# ---------------------------------------------------------------------------
-validate_runtime
-
-# ---------------------------------------------------------------------------
-# 2. Resolve the main checkout
+# 1. Resolve the main checkout
 # ---------------------------------------------------------------------------
 if in_main_checkout; then
     echo "This directory is the main repo, not a worktree. Nothing to set up." >&2
     exit 0
 fi
 MAIN_REPO="$(main_checkout_dir)"
+
+# ---------------------------------------------------------------------------
+# 2. Validate runtime and prerequisites
+# ---------------------------------------------------------------------------
+validate_runtime
 
 # ---------------------------------------------------------------------------
 # 3. Copy .env files from the main repo if they don't exist here
@@ -99,6 +81,18 @@ if [[ -f "$TESTING_ENV_PATH" ]] && is_mysql_connection "$TESTING_ENV_PATH"; then
     echo "Enabled TEST_DB_PER_WORKTREE=true for this worktree."
 fi
 
+# Per-worktree development databases are off unless configured; install
+# writes WORKTREE_DEV_DB_PER_WORKTREE=true.
+DEV_DB_PER_WORKTREE=false
+if [[ "${WORKTREE_DEV_DB_PER_WORKTREE:-}" == true && -f "$ENV_PATH" ]]; then
+    connection="$(env_file_value "$ENV_PATH" DB_CONNECTION)"
+    if [[ "$connection" =~ ^(mysql|mariadb)$ ]]; then
+        DEV_DB_PER_WORKTREE=true
+    else
+        echo "Skipping the per-worktree development database: only MySQL/MariaDB are supported (DB_CONNECTION=${connection:-unset})."
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # 3b. Point the env files away from the main checkout's databases
 # ---------------------------------------------------------------------------
@@ -112,7 +106,7 @@ MAIN_DEV_DB="$(main_dev_database)"
 TEST_DB=""
 DEV_DB=""
 
-if [[ "$DEV_DB_PER_WORKTREE" =~ ^(true|1)$ && -f "$ENV_PATH" ]] && is_mysql_connection "$ENV_PATH"; then
+if [[ "$DEV_DB_PER_WORKTREE" == true ]]; then
     DEV_DB="$(derive_dev_database_name "${MAIN_DEV_DB:-$(env_file_value "$ENV_PATH" DB_DATABASE)}" "$WORKTREE_BASENAME")" || DEV_DB=""
     [[ "$DEV_DB" != "$MAIN_DEV_DB" ]] || DEV_DB=""
     set_env_file_value "$ENV_PATH" DB_DATABASE "$DEV_DB"
@@ -202,14 +196,11 @@ if [[ "$TEST_DB_PER_WORKTREE" == true ]]; then
     fi
 fi
 
-if [[ "$DEV_DB_PER_WORKTREE" =~ ^(true|1)$ && -f "$ENV_PATH" ]]; then
+if [[ "$DEV_DB_PER_WORKTREE" == true ]]; then
     echo ""
     echo "Creating per-worktree development database..."
 
-    connection="$(env_file_value "$ENV_PATH" DB_CONNECTION)"
-    if [[ ! "$connection" =~ ^(mysql|mariadb)$ ]]; then
-        echo "Skipping: only MySQL/MariaDB are supported (DB_CONNECTION=${connection:-unset})."
-    elif [[ -z "$DEV_DB" ]]; then
+    if [[ -z "$DEV_DB" ]]; then
         echo "Warning: Could not derive a development database name from the main checkout's DB_DATABASE." >&2
         echo "  DB_DATABASE is left blank in .env; set it and re-run vendor/bin/worktree setup." >&2
     elif result="$($ENSURE_DB "$ENV_PATH" "$DEV_DB" "$MAIN_DEV_DB")"; then

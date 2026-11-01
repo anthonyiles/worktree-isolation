@@ -222,7 +222,7 @@ function cleanupTargets(array $conf, string $mainDir): array
         $targets[] = target('test', TestDatabaseResolver::class, $testBase, $testingFile, $testingEnv);
     }
 
-    $devEnabled = in_array($conf['WORKTREE_DEV_DB_PER_WORKTREE'] ?? 'false', ['true', '1'], true);
+    $devEnabled = ($conf['WORKTREE_DEV_DB_PER_WORKTREE'] ?? '') === 'true';
     $devEnv = parseEnvFile("$mainDir/.env");
     $devBase = databaseBase($devEnv);
     if ($devEnabled && $devBase !== '' && isMysqlConnection($devEnv)) {

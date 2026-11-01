@@ -23,7 +23,7 @@ composer require anthonyiles/worktree-isolation --dev
 vendor/bin/worktree install
 ```
 
-Run `install` on the host, not inside Sail. It writes `.worktree-isolation.env` (commit it) and registers a git hook for this clone. Each teammate runs `vendor/bin/worktree install` once per clone; it keeps the committed config and just registers the hook, which then works for worktrees of any branch.
+Run `install` on the host, not inside Sail. It writes `.worktree-isolation.env` (commit it) and registers a git hook for this clone. Each teammate runs `vendor/bin/worktree install` once per clone; it keeps the committed config and just registers the hook. Worktrees of branches without the committed config are skipped.
 
 Pick the runtime that matches how you run PHP:
 

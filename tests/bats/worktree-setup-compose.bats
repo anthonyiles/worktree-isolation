@@ -37,12 +37,12 @@ setup() {
     [ "$first_up_line" -lt "$first_exec_line" ]
 }
 
-@test "resolves _worktree-lib.sh when invoked through a symlink (mirrors vendor/bin/)" {
+@test "runs setup through vendor/bin/worktree's symlink" {
     symlink_dir="$BATS_TEST_TMPDIR/vendor-bin"
     mkdir -p "$symlink_dir"
-    ln -s "$STUBS_DIR/worktree-setup" "$symlink_dir/worktree-setup"
+    ln -s "$STUBS_DIR/worktree" "$symlink_dir/worktree"
 
-    run bash "$symlink_dir/worktree-setup"
+    run bash "$symlink_dir/worktree" setup
     [ "$status" -eq 0 ]
 
     run grep -- "up -d" "$DOCKER_LOG"
@@ -76,6 +76,7 @@ setup() {
 }
 
 @test "does nothing in the main checkout" {
+    cp "$WORKTREE_DIR/.worktree-isolation.env" "$MAIN_REPO/"
     cd "$MAIN_REPO"
 
     run bash "$STUBS_DIR/worktree-setup"
@@ -114,4 +115,34 @@ SCRIPT
     [ "$status" -eq 0 ]
     [[ "$output" == *"Warning: npm install --no-progress failed"* ]]
     [[ "$output" == *"Worktree setup complete"* ]]
+}
+
+@test "skips a worktree whose branch has no .worktree-isolation.env" {
+    rm "$WORKTREE_DIR/.worktree-isolation.env"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"its branch predates worktree-isolation"* ]]
+    run grep TEST_DB_PER_WORKTREE "$WORKTREE_DIR/.env.testing"
+    [ "$status" -ne 0 ]
+    [ ! -s "$DOCKER_LOG" ]
+}
+
+@test "fails in the main checkout without .worktree-isolation.env" {
+    cd "$MAIN_REPO"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Run vendor/bin/worktree install first"* ]]
+}
+
+@test "checks for the main checkout before the runtime" {
+    printf 'WORKTREE_RUNTIME=docker-image\nWORKTREE_DOCKER_IMAGE=missing/image\n' > "$MAIN_REPO/.worktree-isolation.env"
+    # As if the image hadn't been built: every docker call fails.
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$FAKE_BIN/docker"
+    cd "$MAIN_REPO"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Nothing to set up"* ]]
 }

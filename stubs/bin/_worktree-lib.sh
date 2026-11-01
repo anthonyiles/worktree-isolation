@@ -3,12 +3,25 @@
 # Shared helpers sourced by stubs/bin/worktree, worktree-install,
 # worktree-setup, and test.
 
+# Usage: load_worktree_config [--skip-if-missing]
+# Exits when .worktree-isolation.env is missing rather than guessing at
+# defaults. In a worktree that means its branch predates worktree-isolation;
+# --skip-if-missing exits 0 there, so setup doesn't fail `git worktree add`.
 # shellcheck disable=SC2034 # the variables are read by the sourcing scripts
 load_worktree_config() {
     # The scripts live in vendor/, so resolve the project root via git.
     PROJECT_ROOT="$(git rev-parse --show-toplevel)"
     WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
 
+    if [[ ! -f "$PROJECT_ROOT/.worktree-isolation.env" ]]; then
+        if in_main_checkout; then
+            echo "Error: .worktree-isolation.env not found. Run vendor/bin/worktree install first." >&2
+            exit 1
+        fi
+        echo "No .worktree-isolation.env in this worktree: its branch predates worktree-isolation." >&2
+        [[ "${1:-}" == --skip-if-missing ]] && exit 0
+        exit 1
+    fi
     load_env_file "$PROJECT_ROOT/.worktree-isolation.env"
 
     RUNTIME="${WORKTREE_RUNTIME:-native}"

@@ -131,7 +131,7 @@ ENV
     [ "$status" -ne 0 ]
 }
 
-@test "stays off when the setting is absent, as in configs from earlier versions" {
+@test "stays off when the setting is absent" {
     sed -i.bak '/^WORKTREE_DEV_DB_PER_WORKTREE=/d' "$WORKTREE_DIR/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/worktree-setup"
