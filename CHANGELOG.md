@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.5.0](https://github.com/anthonyiles/worktree-isolation/compare/v1.4.0...v1.5.0) (2026-11-02)
+
+
+### Features
+
+* run worktree install without PHP on the host ([7e83e4a](https://github.com/anthonyiles/worktree-isolation/commit/7e83e4a6855d0d8f77f2da94e4b4927d9a1683e9))
+* run worktree install without PHP on the host ([a731e5b](https://github.com/anthonyiles/worktree-isolation/commit/a731e5b18ce7de84218bec260ef4f0581ed98a04))
+
+
+### Bug Fixes
+
+* derive database names in bash only, independent of the locale ([543ee9b](https://github.com/anthonyiles/worktree-isolation/commit/543ee9be257318254d845f40cd5b5a55dac897ff))
+* derive database names in bash only, independent of the locale ([429b8f3](https://github.com/anthonyiles/worktree-isolation/commit/429b8f3dfc405c18017cd18c9af8d1b7df3cc991))
+* keep database credentials off the command line ([823945e](https://github.com/anthonyiles/worktree-isolation/commit/823945e5c03b6856e227de57874a47318515e53d))
+* keep database credentials off the command line ([68f7e05](https://github.com/anthonyiles/worktree-isolation/commit/68f7e05c8afc1137564971270e1130323b8d11cb))
+* make the JavaScript install in setup optional ([8b80ae6](https://github.com/anthonyiles/worktree-isolation/commit/8b80ae685709e7a2a9909afbcac25d83137847cc))
+* make the JavaScript install in setup optional ([b1576a6](https://github.com/anthonyiles/worktree-isolation/commit/b1576a6615d8a00b23b89ed2780047604dee99c2))
+* parse env files instead of sourcing them ([61c7333](https://github.com/anthonyiles/worktree-isolation/commit/61c73339a07e850fd67a35aaba54c76a7357a12f))
+* parse env files instead of sourcing them ([7dd3327](https://github.com/anthonyiles/worktree-isolation/commit/7dd3327381f39dd8f8827c3c2e0b702b8a8e15b2))
+* reject unknown options in worktree clean ([d074454](https://github.com/anthonyiles/worktree-isolation/commit/d074454dc331f2fda347398f8c94b6f5ce1b8de5))
+* reject unknown options in worktree clean ([53bc174](https://github.com/anthonyiles/worktree-isolation/commit/53bc17468f5e48b2a63b706cdf37279f6f9e0399))
+* require .worktree-isolation.env and tidy the shell scripts ([e28c499](https://github.com/anthonyiles/worktree-isolation/commit/e28c4999f4cc2aa775a98fec5dfe3725ab01a8e6))
+* require .worktree-isolation.env and tidy the shell scripts ([2909f43](https://github.com/anthonyiles/worktree-isolation/commit/2909f434211bf125f922ea23e1edffe6722d8046))
+* run artisan worktree:clean through the configured runtime ([882090b](https://github.com/anthonyiles/worktree-isolation/commit/882090bd841ebfd7cd20dad6a24110656f8d5b51))
+* run artisan worktree:clean through the configured runtime ([b2a6dc5](https://github.com/anthonyiles/worktree-isolation/commit/b2a6dc566ebb1bab204ebc5a3e4abe1cde488e0d))
+* support PHP 8.2 by dropping typed class constants ([fdf2c9c](https://github.com/anthonyiles/worktree-isolation/commit/fdf2c9cde3a56c1cc4c72e9efff1bbd03eb77ebb))
+* support PHP 8.2 by dropping typed class constants ([3970b50](https://github.com/anthonyiles/worktree-isolation/commit/3970b5091d02fea75b305e5256a9fd7dbfb2e811))
+* truncate overlong per-worktree database names instead of failing ([5751e6a](https://github.com/anthonyiles/worktree-isolation/commit/5751e6ac7844a351b44d70e63c8a067d6a717180))
+* truncate overlong per-worktree database names instead of failing ([0fdc018](https://github.com/anthonyiles/worktree-isolation/commit/0fdc018e9dca702a7cb1d5ba5bed1861dba13d69))
+
 ## [1.4.0](https://github.com/anthonyiles/worktree-isolation/compare/v1.3.0...v1.4.0) (2026-09-24)
 
 
