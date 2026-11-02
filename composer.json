@@ -1,6 +1,6 @@
 {
     "name": "anthonyiles/worktree-isolation",
-    "description": "Per-worktree test database isolation and bootstrap automation for PHP projects.",
+    "description": "Gives every git worktree of a PHP project its own dependencies, env files and databases.",
     "keywords": ["worktree", "testing", "isolation", "docker", "docker-compose", "laravel", "herd", "valet", "phpunit"],
     "license": "MIT",
     "type": "library",

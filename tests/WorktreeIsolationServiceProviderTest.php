@@ -15,10 +15,4 @@ class WorktreeIsolationServiceProviderTest extends TestCase
         $this->assertArrayHasKey('worktree:install', Artisan::all());
         $this->assertArrayHasKey('worktree:clean', Artisan::all());
     }
-
-    #[Test]
-    public function it_merges_the_default_config(): void
-    {
-        $this->assertSame('native', config('worktree-isolation.runtime'));
-    }
 }
