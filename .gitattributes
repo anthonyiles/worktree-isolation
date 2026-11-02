@@ -4,6 +4,5 @@
 /.gitignore                     export-ignore
 /.release-please-manifest.json  export-ignore
 /phpunit.xml.dist               export-ignore
-/plans                          export-ignore
 /release-please-config.json     export-ignore
 /tests                          export-ignore
