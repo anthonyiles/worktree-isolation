@@ -89,11 +89,8 @@ detect_sail() {
 # Mirrors Docker Compose's own default: COMPOSE_PROJECT_NAME from .env, else
 # the directory name, lowercased with anything outside [a-z0-9_-] dropped.
 compose_project_name() {
-    local name=""
-    if [[ -f "$1/.env" ]]; then
-        name="$(grep -E '^COMPOSE_PROJECT_NAME=' "$1/.env" | tail -n 1 | tr -d '\r' \
-            | sed -E "s/^COMPOSE_PROJECT_NAME=['\"]?//; s/['\"].*//; s/^[[:space:]]+//; s/[[:space:]]+$//")" || name=""
-    fi
+    local name
+    name="$(env_file_value "$1/.env" COMPOSE_PROJECT_NAME)"
     [[ -n "$name" ]] || name="$(basename "$1")"
 
     printf '%s' "$name" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -cd 'a-z0-9_-' | sed -E 's/^[_-]+//'
@@ -457,6 +454,6 @@ echo "Next steps:"
 echo "  1. Review .worktree-isolation.env and adjust if needed"
 echo "  2. Commit .worktree-isolation.env"
 echo "  3. Other engineers just need to run: vendor/bin/worktree install (or php artisan worktree:install for Laravel)"
-echo "     once per clone — this activates the hook locally and works for worktrees on any branch,"
-echo "     including branches that predate this package being added."
+echo "     once per clone — this activates the hook locally. Worktrees of branches without the"
+echo "     committed .worktree-isolation.env are skipped."
 echo ""

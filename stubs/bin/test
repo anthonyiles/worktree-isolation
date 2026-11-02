@@ -19,21 +19,7 @@
 # straight into this file); not itself exposed as a Composer bin.
 set -euo pipefail
 
-# This file can still be invoked through a symlink (bats tests do this), so
-# keep resolving one defensively even though vendor/bin/worktree calls it by
-# a direct, non-symlinked path. readlink -f isn't portable (no -f on macOS's
-# stock readlink), so resolve it manually.
-resolve_script_dir() {
-    local src="${BASH_SOURCE[0]}"
-    while [[ -h "$src" ]]; do
-        local dir
-        dir="$(cd -P "$(dirname "$src")" && pwd)"
-        src="$(readlink "$src")"
-        [[ "$src" != /* ]] && src="$dir/$src"
-    done
-    cd -P "$(dirname "$src")" && pwd
-}
-SCRIPT_DIR="$(resolve_script_dir)"
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/_worktree-lib.sh"
 
@@ -77,7 +63,7 @@ RUN_TESTS='
 TEST_ENV=(-e "TEST_COMMAND=$TEST_COMMAND")
 MAIN_TEST_DB="$(main_test_database)"
 
-if [[ "${TEST_DB_PER_WORKTREE:-}" =~ ^(true|1)$ && "${DB_CONNECTION:-}" =~ ^(mysql|mariadb)$ ]]; then
+if [[ "${TEST_DB_PER_WORKTREE:-}" == true && "${DB_CONNECTION:-}" =~ ^(mysql|mariadb)$ ]]; then
     # Derive from the main checkout's name, as setup does.
     base_db="${MAIN_TEST_DB:-${DB_DATABASE:-}}"
     if ! DB_DATABASE="$(derive_test_database_name "${base_db:-testing}" "$WORKTREE_BASENAME")"; then

@@ -53,6 +53,12 @@ SCRIPT
 }
 
 @test "delegates 'clean' to worktree-clean with args forwarded" {
+    project="$BATS_TEST_TMPDIR/project"
+    mkdir -p "$project"
+    git -C "$project" init -q
+    echo "WORKTREE_RUNTIME=native" > "$project/.worktree-isolation.env"
+    cd "$project"
+
     run "$DISPATCH_DIR/worktree" clean --force
     [ "$status" -eq 0 ]
     [ "$(cat "$LOG")" = "worktree-clean --force" ]

@@ -175,3 +175,16 @@ install_stubs_in_vendor() {
     run grep -- " exec " "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
+
+@test "fails in a worktree whose branch has no .worktree-isolation.env" {
+    rm "$WORKTREE_DIR/.worktree-isolation.env"
+
+    run bash "$STUBS_DIR/worktree" composer install
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"its branch predates worktree-isolation"* ]]
+    [ ! -s "$DOCKER_LOG" ]
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"its branch predates worktree-isolation"* ]]
+}

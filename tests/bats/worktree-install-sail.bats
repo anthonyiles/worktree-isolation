@@ -72,6 +72,17 @@ config_value() {
     [ "$(config_value WORKTREE_DOCKER_NETWORK)" = "WORKTREE_DOCKER_NETWORK=shop_sail" ]
 }
 
+@test "reads COMPOSE_PROJECT_NAME with export, spaces or a trailing comment" {
+    add_sail
+    local line
+    for line in 'COMPOSE_PROJECT_NAME=shop # local stack' 'export COMPOSE_PROJECT_NAME=shop' 'COMPOSE_PROJECT_NAME = shop'; do
+        echo "$line" > "$PROJECT_DIR/.env"
+        run run_install --force
+        [ "$status" -eq 0 ]
+        [ "$(config_value WORKTREE_DOCKER_NETWORK)" = "WORKTREE_DOCKER_NETWORK=shop_sail" ] || { echo "$line"; return 1; }
+    done
+}
+
 @test "explicit options override Sail detection" {
     add_sail
     run run_install --docker-network=custom
