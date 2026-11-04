@@ -643,3 +643,38 @@ set_env_file_value() {
 is_mysql_connection() {
     [[ "$(env_file_value "$1" DB_CONNECTION)" =~ ^(mysql|mariadb)$ ]]
 }
+
+# Usage: warn_about_hooks_calling_sail DIR
+# The project's own git hooks run in worktrees too, where `sail` and `docker
+# compose exec` reach the main checkout's container, so e.g. a pre-commit
+# pint --dirty formats the main checkout's files. Checks hook.*.command and
+# the hooks directory (core.hooksPath, and husky's scripts above .husky/_).
+# Hooks that mention vendor/bin/worktree are assumed to handle worktrees.
+warn_about_hooks_calling_sail() {
+    local pattern='(^|[[:space:];&|(/])sail[[:space:]]|docker[ -]compose[^;&|]*[[:space:]](exec|run)[[:space:]]'
+    local found=() line hooks_dir hook_dirs=() dir file
+    while IFS= read -r line; do
+        if [[ "$line" != hook.worktree-setup.command* && "$line" =~ $pattern && "$line" != *vendor/bin/worktree* ]]; then
+            found+=("git config ${line%% *}")
+        fi
+    done < <(git -C "$1" config --get-regexp '^hook\..*\.command$' 2> /dev/null)
+
+    if hooks_dir="$(git -C "$1" rev-parse --path-format=absolute --git-path hooks 2> /dev/null)"; then
+        hook_dirs=("$hooks_dir")
+        [[ "$hooks_dir" != */_ ]] || hook_dirs+=("${hooks_dir%/_}")
+    fi
+    for dir in ${hook_dirs[@]+"${hook_dirs[@]}"}; do
+        for file in "$dir"/*; do
+            [[ -f "$file" && "$file" != *.sample ]] || continue
+            if grep -qE "$pattern" "$file" && ! grep -q vendor/bin/worktree "$file"; then
+                found+=("${file#"$1"/}")
+            fi
+        done
+    done
+
+    if [[ ${#found[@]} -gt 0 ]]; then
+        echo "Warning: these git hooks call sail or docker compose, which in a worktree run in the main checkout's container:" >&2
+        printf '  %s\n' "${found[@]}" >&2
+        echo "  In a worktree ([ -f .git ]), run those commands through vendor/bin/worktree instead." >&2
+    fi
+}

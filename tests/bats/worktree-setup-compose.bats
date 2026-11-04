@@ -216,3 +216,30 @@ SCRIPT
     run grep -- "bash -c" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
+
+@test "warns about project git hooks that call sail or docker compose" {
+    git config hook.pint.command "vendor/bin/sail php vendor/bin/pint --dirty"
+    git config hook.pint.event pre-commit
+    git config hook.ok.command "vendor/bin/pint --dirty"
+    mkdir -p .husky/_
+    git config core.hooksPath .husky/_
+    printf '#!/bin/sh\n. "$(dirname "$0")/h"\n' > .husky/_/pre-commit
+    printf 'docker compose exec -T app php artisan test\n' > .husky/pre-push
+    printf 'if [ -f .git ]; then vendor/bin/worktree php x; else ./vendor/bin/sail php x; fi\n' > .husky/post-merge
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Warning: these git hooks call sail or docker compose"* ]]
+    [[ "$output" == *"  git config hook.pint.command"* ]]
+    [[ "$output" == *"  .husky/pre-push"* ]]
+    [[ "$output" != *"hook.ok.command"* ]]
+    [[ "$output" != *"pre-commit"* ]]
+    [[ "$output" != *"post-merge"* ]]
+    [[ "$output" != *"worktree-setup"* ]]
+}
+
+@test "doesn't warn about hooks without sail" {
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"git hooks call sail"* ]]
+}

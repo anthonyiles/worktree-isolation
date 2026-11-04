@@ -60,7 +60,7 @@ vendor/bin/worktree clean                     # drop databases of removed worktr
 
 Tip: `alias worktree='vendor/bin/worktree'`.
 
-> **With Sail or Docker Compose, don't call `sail` or `docker compose` directly inside a worktree.** They exec into whichever container is already running, which is usually mounted on the main checkout, so commands run against the wrong code and database. `vendor/bin/worktree` always targets the current worktree.
+> **With Sail or Docker Compose, don't call `sail` or `docker compose` directly inside a worktree, including from git hooks.** They exec into whichever container is already running, which is usually mounted on the main checkout, so commands run against the wrong code and database (a pre-commit `sail pint --dirty` formats the main checkout's files). `vendor/bin/worktree` always targets the current worktree; in a hook, use it when `.git` is a file. `install` and `setup` warn about hooks that call `sail`.
 
 ## What setup does
 

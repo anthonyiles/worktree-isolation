@@ -251,3 +251,13 @@ common_settings)" ]
     [ "$status" -eq 0 ]
     [ "$(sed -n 1,3p "$PROJECT_DIR/AGENTS.md")" = "$(printf '# Mine\n\n<!-- worktree-isolation:start -->')" ]
 }
+
+@test "warns about project git hooks that call sail" {
+    printf '#!/bin/sh\nvendor/bin/sail php vendor/bin/pint --dirty\n' > "$PROJECT_DIR/.git/hooks/pre-commit"
+
+    run run_install
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Warning: these git hooks call sail or docker compose"* ]]
+    [[ "$output" == *"  .git/hooks/pre-commit"* ]]
+    [[ "$output" != *"  git config hook."* ]]
+}

@@ -269,4 +269,5 @@ fi
 # Done
 # ---------------------------------------------------------------------------
 echo ""
+warn_about_hooks_calling_sail "$PROJECT_ROOT"
 echo "Worktree setup complete. You can now run tests with: vendor/bin/worktree test"

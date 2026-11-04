@@ -39,6 +39,9 @@ different worktree. The command then reads that checkout's code and `.env.testin
 and migrates or wipes its database. `vendor/bin/worktree` resolves the runtime
 (native, Docker Compose, Sail/standalone image) for the current worktree every time.
 
+Git hooks that call `sail` have the same problem. If setup warns about one, tell the
+user rather than committing around it.
+
 ## Creating a worktree
 
 ```bash
