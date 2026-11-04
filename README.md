@@ -60,7 +60,9 @@ vendor/bin/worktree clean                     # drop databases of removed worktr
 
 Tip: `alias worktree='vendor/bin/worktree'`.
 
-> **With Sail or Docker Compose, don't call `sail` or `docker compose` directly inside a worktree, including from git hooks.** They exec into whichever container is already running, which is usually mounted on the main checkout, so commands run against the wrong code and database (a pre-commit `sail pint --dirty` formats the main checkout's files). `vendor/bin/worktree` always targets the current worktree; in a hook, use it when `.git` is a file. `install` and `setup` warn about hooks that call `sail`.
+> **With Sail or Docker Compose, don't call `sail` or `docker compose` directly inside a worktree, including from git hooks.** They exec into whichever container is already running, which is usually mounted on the main checkout, so commands run against the wrong code and database (a pre-commit `sail pint --dirty` formats the main checkout's files). `vendor/bin/worktree` always targets the current worktree. `install` and `setup` warn about hooks that call `sail`.
+
+To use one command in every checkout, e.g. `bash vendor/bin/worktree php vendor/bin/pint $STAGED_FILES` in a git hook, set `WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true`. In the main checkout it then runs in your usual runtime: on the host, in your running Compose service, or in a fresh container of the image. Inside a container (Sail, or no `docker`) it runs the command directly.
 
 ## What setup does
 
@@ -111,6 +113,8 @@ WORKTREE_RUNTIME=native
 # WORKTREE_DOCKER_IMAGE=sail-8.4/app
 # WORKTREE_DOCKER_NETWORK=myproject_sail
 # WORKTREE_DOCKER_WORKDIR=/var/www/html
+# WORKTREE_DOCKER_SERVICE=laravel.test           # whose environment containers get; defaults to the service using the image, empty for none
+# WORKTREE_DOCKER_ENV="PHPSTAN_MAX_PROCESSES=4"   # more KEY=value pairs passed to every container
 
 # Per-worktree development databases (false or unset: worktrees share the main checkout's)
 WORKTREE_DEV_DB_PER_WORKTREE=true
@@ -125,6 +129,8 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_PRUNE=ask             # report | ask | remove merged worktrees
 # WORKTREE_PRUNE_BRANCH=develop  # merged into; defaults to origin's default branch
 # WORKTREE_PRUNE_ON_SETUP=true   # false: setup doesn't run prune
+
+# WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true   # vendor/bin/worktree <command> also works in the main checkout
 ```
 
 Commands are run as you'd type them in a shell, so quoting works.

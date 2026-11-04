@@ -46,9 +46,27 @@ in_main_checkout() {
     [[ "$(git rev-parse --path-format=absolute --git-dir)" == "$(git rev-parse --path-format=absolute --git-common-dir)" ]]
 }
 
+# Usage: require_worktree [hint]
 require_worktree() {
     if in_main_checkout; then
         echo "Error: this is the main checkout, not a git worktree. Run this from inside a worktree." >&2
+        [[ -z "${1:-}" ]] || echo "$1" >&2
+        exit 1
+    fi
+}
+
+# Already inside the runtime (e.g. a hook run in Sail, or
+# `sail artisan worktree:clean`): there's no docker to reach it with, and no
+# need to.
+in_runtime() {
+    [[ "${LARAVEL_SAIL:-}" == 1 ]] || ! command -v docker > /dev/null 2>&1
+}
+
+# The main checkout's stack is the user's own: commands go into it, but it's
+# never started for them.
+require_compose_service_running() {
+    if ! "${COMPOSE_ARGS[@]}" ps --status running --services 2> /dev/null | grep -qxF "$COMPOSE_SERVICE"; then
+        echo "Error: the '$COMPOSE_SERVICE' service isn't running in the main checkout's stack. Start it first (e.g. docker compose up -d)." >&2
         exit 1
     fi
 }
@@ -85,6 +103,15 @@ validate_runtime() {
                 echo "Build it first (e.g. 'docker compose build' or 'vendor/bin/sail build')." >&2
                 exit 1
             fi
+            local pair pairs=()
+            read -ra pairs <<< "${WORKTREE_DOCKER_ENV:-}"
+            for pair in ${pairs[@]+"${pairs[@]}"}; do
+                if [[ ! "$pair" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+                    echo "Error: WORKTREE_DOCKER_ENV entry '$pair' isn't KEY=value." >&2
+                    exit 1
+                fi
+            done
+            load_service_env
             ;;
         *)
             echo "Error: Unknown WORKTREE_RUNTIME '$RUNTIME'. Use: native, docker-compose, or docker-image." >&2
@@ -505,14 +532,155 @@ normalize_path() {
     echo "/${out[*]+"${out[*]}"}"
 }
 
+# The compose service that normally runs the image sets environment a plain
+# docker run lacks (Sail's laravel.test: LARAVEL_SAIL, XDEBUG_MODE, and
+# whatever the project adds). It's read on every run, with Compose resolving
+# it against this checkout's own .env, so it follows the compose file and
+# never lands in the committed config. WORKTREE_DOCKER_SERVICE names the
+# service; unset, it's the one using the image, and empty turns this off.
+# Fills SERVICE_ENV with KEY=value pairs.
+load_service_env() {
+    SERVICE_ENV=()
+    local service="${WORKTREE_DOCKER_SERVICE-}" args=(docker compose) config lines line key value
+    if [[ -n "${WORKTREE_DOCKER_SERVICE+set}" && -z "$service" ]]; then
+        return 0
+    fi
+    if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
+        args+=(-f "$WORKTREE_COMPOSE_FILE")
+    elif ! has_compose_file; then
+        [[ -z "$service" ]] || echo "Warning: no compose file, so containers don't get the $service service's environment." >&2
+        return 0
+    fi
+
+    if ! config="$(cd "$PROJECT_ROOT" && "${args[@]}" config 2> /dev/null)"; then
+        echo "Warning: 'docker compose config' failed, so containers don't get the compose service's environment." >&2
+        return 0
+    fi
+    lines="$(compose_service_env "$config" "$service" "$IMAGE")"
+    if [[ -n "$service" && -z "$lines" ]]; then
+        echo "Warning: no '$service' service in the compose file, so containers don't get its environment." >&2
+        return 0
+    fi
+
+    while IFS=$'\t' read -r key value; do
+        # HOME and PATH belong to the image and to the container's user
+        # (HOME=/tmp, see CONTAINER_USER_ARGS); exporting them here would
+        # also change this script's own.
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "$key" != HOME && "$key" != PATH ]] || continue
+        value="$(yaml_scalar "$value")" || continue
+        SERVICE_ENV+=("$key=$value")
+    done < <(printf '%s\n' "$lines" | tail -n +2)
+}
+
+# Whether Compose would find a compose file in the checkout without -f.
+has_compose_file() {
+    local file
+    [[ -n "${COMPOSE_FILE:-$(env_file_value "$PROJECT_ROOT/.env" COMPOSE_FILE)}" ]] && return 0
+    for file in compose.yaml compose.yml docker-compose.yml docker-compose.yaml; do
+        [[ -f "$PROJECT_ROOT/$file" ]] && return 0
+    done
+    return 1
+}
+
+# Reads `docker compose config` output, whose layout Compose normalizes:
+# services at two spaces, their keys at four, environment entries at six.
+# Prints "service <name>" and then "KEY<tab>raw value" lines for the named
+# service, or else the one using the image (preferring the one that builds
+# it, as Sail's laravel.test does), or nothing.
+compose_service_env() {
+    printf '%s\n' "$1" | awk -v want="$2" -v image="$3" '
+        function unquote(s) {
+            if (s ~ /^".*"$/ || s ~ /^\047.*\047$/) s = substr(s, 2, length(s) - 2)
+            return s
+        }
+        /^[^ ]/ { in_services = ($0 == "services:"); next }
+        !in_services { next }
+        /^  [^ ]/ {
+            service = unquote(substr($0, 3, length($0) - 3))
+            order[++count] = service
+            section = ""
+            next
+        }
+        /^    [^ ]/ {
+            line = substr($0, 5)
+            section = line
+            sub(/:.*/, "", section)
+            if (section == "image") images[service] = unquote(substr(line, 8))
+            if (section == "build") builds[service] = 1
+            next
+        }
+        section == "environment" && /^      [^ ]/ {
+            line = substr($0, 7)
+            key = line
+            sub(/:.*/, "", key)
+            value = substr(line, length(key) + 2)
+            sub(/^ /, "", value)
+            env[service] = env[service] key "\t" value "\n"
+        }
+        END {
+            for (i = 1; i <= count; i++) {
+                s = order[i]
+                if (s == want) found = 1
+                if (image != "" && images[s] == image && (pick == "" || (builds[s] && !builds[pick]))) pick = s
+            }
+            if (want == "") want = pick
+            else if (!found) exit
+            if (want != "") printf "service %s\n%s", want, env[want]
+        }
+    '
+}
+
+# Decodes a YAML scalar as `docker compose config` prints it. Fails for null
+# and for block scalars, which it doesn't print for environment values in
+# practice.
+yaml_scalar() {
+    local value="$1" decoded="" i char
+    case "$value" in
+        null|'~'|'|'*|'>'*)
+            return 1
+            ;;
+        \'*\')
+            value="${value:1:${#value}-2}"
+            printf '%s' "${value//\'\'/\'}"
+            ;;
+        \"*\")
+            value="${value:1:${#value}-2}"
+            for ((i = 0; i < ${#value}; i++)); do
+                char="${value:i:1}"
+                if [[ "$char" == \\ ]]; then
+                    i=$((i + 1))
+                    case "${value:i:1}" in
+                        n) char=$'\n' ;;
+                        t) char=$'\t' ;;
+                        *) char="${value:i:1}" ;;
+                    esac
+                fi
+                decoded+="$char"
+            done
+            printf '%s' "$decoded"
+            ;;
+        *)
+            printf '%s' "$value"
+            ;;
+    esac
+}
+
+# WORKTREE_DOCKER_ENV's values (and the compose service's) are exported and
+# passed by name, as run_in_runtime does, so they stay out of a process
+# listing. WORKTREE_DOCKER_ENV comes second, so it wins.
 build_docker_image_args() {
-    local git_dir
+    local git_dir pair pairs=()
     DOCKER_ARGS=(
         docker run --rm
         "${CONTAINER_USER_ARGS[@]}"
         "${CONTAINER_GIT_ENV[@]}"
-        -v "$PROJECT_ROOT:$WORKDIR"
     )
+    read -ra pairs <<< "${WORKTREE_DOCKER_ENV:-}"
+    for pair in ${SERVICE_ENV[@]+"${SERVICE_ENV[@]}"} ${pairs[@]+"${pairs[@]}"}; do
+        export "${pair?}"
+        DOCKER_ARGS+=(-e "${pair%%=*}")
+    done
+    DOCKER_ARGS+=(-v "$PROJECT_ROOT:$WORKDIR")
     # Read-write: git add, stash and the like write to the index.
     git_dir="$(container_git_dir "$WORKDIR")"
     if [[ -n "$git_dir" ]]; then
@@ -675,6 +843,6 @@ warn_about_hooks_calling_sail() {
     if [[ ${#found[@]} -gt 0 ]]; then
         echo "Warning: these git hooks call sail or docker compose, which in a worktree run in the main checkout's container:" >&2
         printf '  %s\n' "${found[@]}" >&2
-        echo "  In a worktree ([ -f .git ]), run those commands through vendor/bin/worktree instead." >&2
+        echo "  Run those commands through vendor/bin/worktree instead. To use it in the main checkout too, set WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true." >&2
     fi
 }

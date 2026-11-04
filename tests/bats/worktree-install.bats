@@ -68,6 +68,9 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 
 # Command run at the end of setup, e.g. to build assets for tests
 # WORKTREE_POST_SETUP_COMMAND=npm run build
+
+# Let vendor/bin/worktree <command> run in the main checkout too (e.g. for git hooks)
+# WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true
 ENV
 }
 
@@ -191,6 +194,11 @@ WORKTREE_RUNTIME=docker-image
 WORKTREE_DOCKER_IMAGE=app-img
 WORKTREE_DOCKER_NETWORK=app-net
 # WORKTREE_DOCKER_WORKDIR=/var/www/html
+# Containers get the environment of the compose service using the image;
+# name another service, or leave it empty for none
+# WORKTREE_DOCKER_SERVICE=laravel.test
+# More KEY=value pairs passed to every container
+# WORKTREE_DOCKER_ENV="PHPSTAN_MAX_PROCESSES=4"
 ENV
 common_settings)" ]
 }

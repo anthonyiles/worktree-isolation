@@ -187,6 +187,7 @@ prune() {
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
 echo "docker \$*" >> "$BATS_TEST_TMPDIR/docker.log"
+[[ "\$*" != *" ps "* ]] || echo app
 [[ "\$*" != *" down "* || -z "\${FAIL_DOWN:-}" ]]
 SCRIPT
     chmod +x "$FAKE_BIN/docker"
