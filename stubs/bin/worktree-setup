@@ -28,6 +28,7 @@ load_worktree_config --skip-if-missing
 DEV_DB_MIGRATE_COMMAND="${WORKTREE_DEV_DB_MIGRATE_COMMAND-php artisan migrate --no-interaction}"
 DEV_DB_SEED_COMMAND="${WORKTREE_DEV_DB_SEED_COMMAND-php artisan db:seed --no-interaction}"
 DB_WAIT_SECONDS="${WORKTREE_DB_WAIT_SECONDS:-30}"
+POST_SETUP_COMMAND="${WORKTREE_POST_SETUP_COMMAND:-}"
 
 # ---------------------------------------------------------------------------
 # 1. Resolve the main checkout
@@ -244,7 +245,18 @@ if [[ -f "$PROJECT_ROOT/package.json" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Prune merged worktrees
+# 8. Project-specific setup
+# ---------------------------------------------------------------------------
+# E.g. npm run build: public/build is git-ignored, so a new worktree has no
+# Vite manifest for tests that render @vite. Only warns on failure.
+if [[ -n "$POST_SETUP_COMMAND" ]]; then
+    echo ""
+    echo "Running: $POST_SETUP_COMMAND"
+    run_in_runtime bash -c "$POST_SETUP_COMMAND" || echo "Warning: $POST_SETUP_COMMAND failed." >&2
+fi
+
+# ---------------------------------------------------------------------------
+# 9. Prune merged worktrees
 # ---------------------------------------------------------------------------
 # Without a fetch, so `git worktree add` never waits on the network, and
 # without failing setup.

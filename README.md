@@ -70,7 +70,8 @@ Tip: `alias worktree='vendor/bin/worktree'`.
 4. Runs `composer install`.
 5. Creates the test and development databases. A new development database is migrated and seeded; an existing one is only migrated.
 6. If there's a `package.json`, runs `npm install` (or `pnpm`, `yarn` or `bun`, by lockfile). A failure here only warns.
-7. Runs `vendor/bin/worktree prune` without fetching.
+7. Runs `WORKTREE_POST_SETUP_COMMAND`, if set (e.g. `npm run build`, so tests that render `@vite` find a manifest). A failure here only warns.
+8. Runs `vendor/bin/worktree prune` without fetching.
 
 `prune` finds worktrees whose branch is merged into origin's default branch, or `WORKTREE_PRUNE_BRANCH` (squash merges included), and removes them with their Compose stacks and databases. Branches are kept, and so are worktrees with uncommitted changes.
 
@@ -115,6 +116,8 @@ WORKTREE_RUNTIME=native
 WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction   # empty to skip
 # WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction      # empty to skip
+
+# WORKTREE_POST_SETUP_COMMAND=npm run build   # run at the end of setup
 
 # WORKTREE_TESTING_ENV_FILE=.env.testing
 # WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example

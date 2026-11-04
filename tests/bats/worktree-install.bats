@@ -65,6 +65,9 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_PRUNE=ask
 # WORKTREE_PRUNE_BRANCH=develop
 # WORKTREE_PRUNE_ON_SETUP=true
+
+# Command run at the end of setup, e.g. to build assets for tests
+# WORKTREE_POST_SETUP_COMMAND=npm run build
 ENV
 }
 

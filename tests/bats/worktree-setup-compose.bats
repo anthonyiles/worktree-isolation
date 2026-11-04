@@ -183,3 +183,36 @@ SCRIPT
     [[ "$output" == *"-e GIT_CONFIG_COUNT=2 "* ]]
     [[ "$output" == *"-e GIT_CONFIG_VALUE_0=*"* ]]
 }
+
+@test "runs the post-setup command once, in the worktree's runtime, after the JavaScript install" {
+    echo '{}' > "$WORKTREE_DIR/package.json"
+    echo "WORKTREE_POST_SETUP_COMMAND=npm run build" >> "$WORKTREE_DIR/.worktree-isolation.env"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+
+    run grep -c -- "-p myapp-feature-auth exec .* -T app bash -c npm run build" "$DOCKER_LOG"
+    [ "$output" -eq 1 ]
+    [ "$(grep -n -- "npm install" "$DOCKER_LOG" | cut -d: -f1)" -lt "$(grep -n -- "npm run build" "$DOCKER_LOG" | cut -d: -f1)" ]
+}
+
+@test "only warns when the post-setup command fails" {
+    echo "WORKTREE_POST_SETUP_COMMAND=npm run build" >> "$WORKTREE_DIR/.worktree-isolation.env"
+    cat > "$FAKE_BIN/docker" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$*" >> "$DOCKER_LOG"
+[[ "\$*" != *"npm run build"* ]]
+SCRIPT
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Warning: npm run build failed."* ]]
+    [[ "$output" == *"Worktree setup complete"* ]]
+}
+
+@test "runs no post-setup command by default" {
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    run grep -- "bash -c" "$DOCKER_LOG"
+    [ "$status" -ne 0 ]
+}
