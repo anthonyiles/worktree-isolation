@@ -67,11 +67,11 @@ validate_runtime() {
             if ! in_main_checkout; then
                 COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$(compose_project_base)" "$WORKTREE_BASENAME")"
                 COMPOSE_ARGS+=(-p "$COMPOSE_PROJECT_NAME")
-            fi
-            if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
+                add_compose_git_override
+            elif [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
                 COMPOSE_ARGS+=(-f "$WORKTREE_COMPOSE_FILE")
             fi
-            COMPOSE_EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec "${CONTAINER_USER_ARGS[@]}")
+            COMPOSE_EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec "${CONTAINER_USER_ARGS[@]}" "${CONTAINER_GIT_ENV[@]}")
             # Sail's compose file builds and serves as these, as vendor/bin/sail sets them.
             export WWWUSER="${WWWUSER:-$(id -u)}" WWWGROUP="${WWWGROUP:-$(id -g)}"
             ;;
@@ -93,6 +93,51 @@ validate_runtime() {
     esac
 }
 
+# A worktree's stack also mounts the main clone's git dir (see
+# container_git_dir), through an override file kept in the worktree's own git
+# dir, out of the working tree. Passing -f stops Compose finding its default
+# files, so those are passed too. With a relative gitdir pointer, whose
+# target depends on the service's own mounts, nothing is added.
+add_compose_git_override() {
+    local files=() file git_dir override value
+    if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
+        files=("$WORKTREE_COMPOSE_FILE")
+    else
+        value="${COMPOSE_FILE:-$(env_file_value "$PROJECT_ROOT/.env" COMPOSE_FILE)}"
+        if [[ -n "$value" ]]; then
+            IFS="${COMPOSE_PATH_SEPARATOR:-:}" read -ra files <<< "$value"
+        else
+            for file in compose.yaml compose.yml docker-compose.yml docker-compose.yaml; do
+                [[ -f "$PROJECT_ROOT/$file" ]] && files=("$file") && break
+            done
+            for file in compose.override.yml compose.override.yaml docker-compose.override.yml docker-compose.override.yaml; do
+                [[ ${#files[@]} -gt 0 && -f "$PROJECT_ROOT/$file" ]] && files+=("$file") && break
+            done
+        fi
+    fi
+
+    for file in ${files[@]+"${files[@]}"}; do
+        [[ "$file" == /* ]] || file="$PROJECT_ROOT/$file"
+        COMPOSE_ARGS+=(-f "$file")
+    done
+    git_dir="$(container_git_dir)"
+    [[ ${#files[@]} -gt 0 && -n "$git_dir" ]] || return 0
+
+    override="$(git rev-parse --path-format=absolute --git-dir)/worktree-isolation.compose.yml"
+    printf 'services:\n  %s:\n    volumes:\n      - type: bind\n        source: %s\n        target: %s\n' \
+        "$(yaml_string "$COMPOSE_SERVICE")" \
+        "$(yaml_string "$(git rev-parse --path-format=absolute --git-common-dir)")" \
+        "$(yaml_string "$git_dir")" > "$override"
+    COMPOSE_ARGS+=(-f "$override")
+}
+
+# Double-quotes a YAML string, escaping $ from Compose's interpolation too.
+yaml_string() {
+    local value="${1//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '"%s"' "${value//\$/\$\$}"
+}
+
 main_checkout_dir() {
     dirname "$(git rev-parse --path-format=absolute --git-common-dir)"
 }
@@ -103,12 +148,118 @@ main_dev_database() {
     env_file_value "$(main_checkout_dir)/.env" DB_DATABASE
 }
 
+# The main checkout's test database, as its tests see it. Worktrees must
+# never use it.
 main_test_database() {
-    local main_dir name
-    main_dir="$(main_checkout_dir)"
-    name="$(env_file_value "$main_dir/$TESTING_ENV_FILE" DB_DATABASE)"
-    [[ -n "$name" ]] || name="$(env_file_value "$main_dir/$TESTING_ENV_EXAMPLE" DB_DATABASE)"
-    echo "$name"
+    test_db_setting "$(main_checkout_dir)" DB_DATABASE || true
+}
+
+# Worktrees' test databases are named after the main checkout's development
+# database, "{name}_test_wt_{worktree}", so no testing env file is needed.
+# The name is cut to 16 bytes to leave the worktree room within 40. Falls
+# back to "testing" when .env has no MySQL/MariaDB database. Matches
+# testDatabaseBase() in worktree-clean.
+test_database_base() {
+    local LC_ALL=C env name=""
+    env="$(main_checkout_dir)/.env"
+    if is_mysql_connection "$env"; then
+        name="$(env_file_value "$env" DB_DATABASE)"
+        name="${name%%_wt_*}"
+        name="${name:0:16}"
+        while [[ "$name" == *[_-] ]]; do
+            name="${name%?}"
+        done
+    fi
+    if [[ -n "$name" ]]; then
+        echo "${name}_test"
+    else
+        echo testing
+    fi
+}
+
+# Per-worktree test databases apply when the tests use MySQL/MariaDB.
+tests_use_mysql() {
+    [[ "$(test_db_setting "$PROJECT_ROOT" DB_CONNECTION)" =~ ^(mysql|mariadb)$ ]]
+}
+
+# Usage: test_db_setting DIR KEY
+# KEY as DIR's tests see it: phpunit.xml (else phpunit.xml.dist), then the
+# testing env file, then .env, which Laravel loads when there's no testing
+# env file. Fails when none sets it, so callers don't pass a blank that
+# would override .env. Matches testSetting() in worktree-clean.
+test_db_setting() {
+    local file
+    phpunit_value "$1" "$2" && return
+    for file in "$1/$TESTING_ENV_FILE" "$1/.env"; do
+        if [[ $'\n'"$(env_file_keys "$file")"$'\n' == *$'\n'"$2"$'\n'* ]]; then
+            env_file_value "$file" "$2"
+            return
+        fi
+    done
+    return 1
+}
+
+# Warns when phpunit.xml's DB_DATABASE beats the per-worktree one, which
+# vendor/bin/worktree test passes in the environment: an <env> with
+# force="true", or a <server>, which PHPUnit always writes to $_SERVER,
+# where Laravel looks first.
+warn_if_phpunit_forces_database() {
+    local file element
+    file="$(phpunit_file "$PROJECT_ROOT")" || return 0
+    element="$(phpunit_variable "$file" DB_DATABASE)"
+    if [[ "$element" == '<server'* || "$(xml_attribute "$element" force)" =~ ^(true|1)$ ]]; then
+        echo "Warning: phpunit.xml sets DB_DATABASE with <server> or force=\"true\", so tests ignore this" >&2
+        echo "  worktree's test database. Use <env name=\"DB_DATABASE\" ...> without force." >&2
+    fi
+}
+
+phpunit_file() {
+    local file
+    for file in "$1/phpunit.xml" "$1/phpunit.xml.dist"; do
+        if [[ -f "$file" ]]; then
+            echo "$file"
+            return
+        fi
+    done
+    return 1
+}
+
+# Usage: phpunit_value DIR NAME
+# The value phpunit.xml's <env> or <server> element gives NAME; fails when
+# there's none.
+phpunit_value() {
+    local file element
+    file="$(phpunit_file "$1")" || return 1
+    element="$(phpunit_variable "$file" "$2")"
+    [[ -n "$element" ]] || return 1
+    xml_attribute "$element" value
+}
+
+# Prints the first <env> or <server> element setting NAME in a phpunit.xml,
+# on one line, ignoring commented-out ones.
+phpunit_variable() {
+    local content rest element pattern='<(env|server)[[:space:]][^>]*>'
+    content="$(tr '\r\n\t' '   ' < "$1")"
+    while [[ "$content" == *'<!--'* ]]; do
+        rest="${content#*<!--}"
+        content="${content%%<!--*}"
+        [[ "$rest" != *'-->'* ]] || content+="${rest#*-->}"
+    done
+    while [[ "$content" =~ $pattern ]]; do
+        element="${BASH_REMATCH[0]}"
+        if [[ "$(xml_attribute "$element" name)" == "$2" ]]; then
+            echo "$element"
+            return
+        fi
+        content="${content#*"$element"}"
+    done
+}
+
+xml_attribute() {
+    local double="[[:space:]]$2[[:space:]]*=[[:space:]]*\"([^\"]*)\"" single="[[:space:]]$2[[:space:]]*=[[:space:]]*'([^']*)'"
+    if [[ "$1" =~ $double || "$1" =~ $single ]]; then
+        echo "${BASH_REMATCH[1]}"
+    fi
 }
 
 # Used for database names and, by worktree-install, the compose project
@@ -167,7 +318,8 @@ derive_dev_database_name() {
 }
 
 # The "test" check runs on the base: a worktree named e.g. "test-refactor"
-# must not make a non-test base pass.
+# must not make a non-test base pass. Capped at 40 characters: MySQL
+# rejected longer test database names.
 derive_test_database_name() {
     local base="${1%%_wt_*}"
     [[ "$(printf '%s' "$base" | LC_ALL=C tr '[:upper:]' '[:lower:]')" == *test* ]] || return 1
@@ -215,12 +367,12 @@ load_worktree_list() {
 # directories and would report every one as gone.
 in_use_databases() {
     local test_base dev_base i name db names=""
-    test_base="$(main_test_database)"
+    test_base="$(test_database_base)"
     dev_base="$(main_dev_database)"
     load_worktree_list
     for ((i = 0; i < ${#WT_PATHS[@]}; i++)); do
         name="$(basename "${WT_PATHS[i]}")"
-        if db="$(derive_test_database_name "${test_base:-testing}" "$name")"; then
+        if db="$(derive_test_database_name "$test_base" "$name")"; then
             names+=",$db"
         fi
         if [[ -n "$dev_base" ]] && db="$(derive_dev_database_name "$dev_base" "$name")"; then
@@ -306,13 +458,67 @@ parse_ensure_db_output() {
     echo "$last"
 }
 
+# Git settings for containers. Files can show up under another owner there
+# (rootless Docker, Docker Desktop), which git refuses as "dubious
+# ownership". The other worktrees aren't mounted, so git gc must not prune
+# them as stale.
+CONTAINER_GIT_ENV=(
+    -e GIT_CONFIG_COUNT=2
+    -e GIT_CONFIG_KEY_0=safe.directory -e "GIT_CONFIG_VALUE_0=*"
+    -e GIT_CONFIG_KEY_1=gc.worktreePruneExpire -e GIT_CONFIG_VALUE_1=never
+)
+
+# Usage: container_git_dir [WORKDIR]
+# A worktree's .git file points at <main>/.git/worktrees/<name>, so a
+# container needs the main clone's git dir mounted where that pointer
+# resolves. Prints that path: the pointer itself when it's absolute, or
+# resolved against WORKDIR, where the worktree is mounted, when it's relative
+# (git worktree add --relative-paths). Prints nothing in the main checkout,
+# or for a relative pointer without WORKDIR.
+container_git_dir() {
+    local workdir="${1:-}" pointer common suffix
+    in_main_checkout && return 0
+    pointer="$(sed -n 's/^gitdir: //p' "$PROJECT_ROOT/.git")"
+    common="$(git rev-parse --path-format=absolute --git-common-dir)"
+    suffix="$(git rev-parse --path-format=absolute --git-dir)"
+    suffix="${suffix#"$common"}"
+    if [[ "$pointer" != /* ]]; then
+        [[ -n "$workdir" ]] || return 0
+        pointer="$(normalize_path "$workdir/$pointer")"
+    fi
+    [[ "$suffix" == /* && "$pointer" == *?"$suffix" ]] || return 0
+    echo "${pointer%"$suffix"}"
+}
+
+# Resolves . and .. in an absolute path without touching the filesystem.
+normalize_path() {
+    local part parts=() out=()
+    IFS=/ read -ra parts <<< "$1"
+    for part in ${parts[@]+"${parts[@]}"}; do
+        case "$part" in
+            ''|.) ;;
+            ..) [[ ${#out[@]} -eq 0 ]] || unset 'out[${#out[@]}-1]' ;;
+            *) out+=("$part") ;;
+        esac
+    done
+    local IFS=/
+    echo "/${out[*]+"${out[*]}"}"
+}
+
 build_docker_image_args() {
+    local git_dir
     DOCKER_ARGS=(
         docker run --rm
         "${CONTAINER_USER_ARGS[@]}"
+        "${CONTAINER_GIT_ENV[@]}"
         -v "$PROJECT_ROOT:$WORKDIR"
-        -w "$WORKDIR"
     )
+    # Read-write: git add, stash and the like write to the index.
+    git_dir="$(container_git_dir "$WORKDIR")"
+    if [[ -n "$git_dir" ]]; then
+        DOCKER_ARGS+=(-v "$(git rev-parse --path-format=absolute --git-common-dir):$git_dir")
+    fi
+    DOCKER_ARGS+=(-w "$WORKDIR")
 
     if [[ -n "$NETWORK" ]]; then
         DOCKER_ARGS+=(--network "$NETWORK")
@@ -436,4 +642,39 @@ set_env_file_value() {
 
 is_mysql_connection() {
     [[ "$(env_file_value "$1" DB_CONNECTION)" =~ ^(mysql|mariadb)$ ]]
+}
+
+# Usage: warn_about_hooks_calling_sail DIR
+# The project's own git hooks run in worktrees too, where `sail` and `docker
+# compose exec` reach the main checkout's container, so e.g. a pre-commit
+# pint --dirty formats the main checkout's files. Checks hook.*.command and
+# the hooks directory (core.hooksPath, and husky's scripts above .husky/_).
+# Hooks that mention vendor/bin/worktree are assumed to handle worktrees.
+warn_about_hooks_calling_sail() {
+    local pattern='(^|[[:space:];&|(/])sail[[:space:]]|docker[ -]compose[^;&|]*[[:space:]](exec|run)[[:space:]]'
+    local found=() line hooks_dir hook_dirs=() dir file
+    while IFS= read -r line; do
+        if [[ "$line" != hook.worktree-setup.command* && "$line" =~ $pattern && "$line" != *vendor/bin/worktree* ]]; then
+            found+=("git config ${line%% *}")
+        fi
+    done < <(git -C "$1" config --get-regexp '^hook\..*\.command$' 2> /dev/null)
+
+    if hooks_dir="$(git -C "$1" rev-parse --path-format=absolute --git-path hooks 2> /dev/null)"; then
+        hook_dirs=("$hooks_dir")
+        [[ "$hooks_dir" != */_ ]] || hook_dirs+=("${hooks_dir%/_}")
+    fi
+    for dir in ${hook_dirs[@]+"${hook_dirs[@]}"}; do
+        for file in "$dir"/*; do
+            [[ -f "$file" && "$file" != *.sample ]] || continue
+            if grep -qE "$pattern" "$file" && ! grep -q vendor/bin/worktree "$file"; then
+                found+=("${file#"$1"/}")
+            fi
+        done
+    done
+
+    if [[ ${#found[@]} -gt 0 ]]; then
+        echo "Warning: these git hooks call sail or docker compose, which in a worktree run in the main checkout's container:" >&2
+        printf '  %s\n' "${found[@]}" >&2
+        echo "  In a worktree ([ -f .git ]), run those commands through vendor/bin/worktree instead." >&2
+    fi
 }

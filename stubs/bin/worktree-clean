@@ -11,9 +11,9 @@ declare(strict_types=1);
  * No framework dependencies — uses only PDO.
  * Laravel projects can also use `php artisan worktree:clean` which delegates here.
  *
- * Reads DB credentials from .env.testing (test) and .env (development). The
- * databases the existing worktrees use come from vendor/bin/worktree, which
- * lists the worktrees on the host as --keep.
+ * Reads DB credentials from the settings the tests use (test) and .env
+ * (development). The databases the existing worktrees use come from
+ * vendor/bin/worktree, which lists the worktrees on the host as --keep.
  *
  * Usage:
  *   vendor/bin/worktree clean
@@ -130,9 +130,10 @@ function usage(): string
     return <<<'HELP'
     Usage: vendor/bin/worktree clean [OPTIONS]
 
-    Drops the per-worktree test databases ("{base}_wt_*", from .env.testing)
-    and development databases ("{base}_wt_*", from .env) whose worktree no
-    longer exists. The main checkout's own databases are never dropped.
+    Drops the per-worktree test databases ("{base}_test_wt_*") and
+    development databases ("{base}_wt_*"), both named after .env, whose
+    worktree no longer exists. The main checkout's own databases are never
+    dropped.
 
     Options:
       --force            Drop databases without confirmation
@@ -205,17 +206,18 @@ function cleanupTargets(array $conf, string $mainDir): array
 {
     $targets = [];
 
-    // Same lookup order as main_test_database() in _worktree-lib.sh.
     $testingFile = $conf['WORKTREE_TESTING_ENV_FILE'] ?? '.env.testing';
     $testingExample = $conf['WORKTREE_TESTING_ENV_EXAMPLE'] ?? '.env.testing.example';
-    $testingEnv = parseEnvFile("$mainDir/$testingFile") ?: parseEnvFile("$mainDir/$testingExample");
-    $testBase = databaseBase($testingEnv) ?: 'testing';
-    if (isMysqlConnection($testingEnv)) {
-        $targets[] = target('test', $testBase, $testingFile, $testingEnv);
+    $devEnv = parseEnvFile("$mainDir/.env");
+    // The settings the tests see, in the order test_db_setting() reads them.
+    $testEnv = phpunitSettings($mainDir)
+        + (parseEnvFile("$mainDir/$testingFile") ?: parseEnvFile("$mainDir/$testingExample"))
+        + $devEnv;
+    if (isMysqlConnection($testEnv)) {
+        $targets[] = target('test', testDatabaseBase($devEnv), "phpunit.xml, $testingFile or .env", $testEnv);
     }
 
     $devEnabled = ($conf['WORKTREE_DEV_DB_PER_WORKTREE'] ?? '') === 'true';
-    $devEnv = parseEnvFile("$mainDir/.env");
     $devBase = databaseBase($devEnv);
     if ($devEnabled && $devBase !== '' && isMysqlConnection($devEnv)) {
         $targets[] = target('development', $devBase, '.env', $devEnv);
@@ -254,10 +256,55 @@ function protectedDatabases(array $conf, string $mainDir): array
 {
     $files = ['.env', $conf['WORKTREE_TESTING_ENV_FILE'] ?? '.env.testing', $conf['WORKTREE_TESTING_ENV_EXAMPLE'] ?? '.env.testing.example'];
 
-    return array_values(array_filter(array_map(
-        fn (string $file) => parseEnvFile("$mainDir/$file")['DB_DATABASE'] ?? '',
-        $files
-    )));
+    $names = array_map(fn (string $file) => parseEnvFile("$mainDir/$file")['DB_DATABASE'] ?? '', $files);
+    $names[] = phpunitSettings($mainDir)['DB_DATABASE'] ?? '';
+
+    return array_values(array_filter($names));
+}
+
+/**
+ * Same as test_database_base() in _worktree-lib.sh: "{name}_test" from the
+ * development database's first 16 bytes, else "testing".
+ *
+ * @param  array<string, string>  $devEnv
+ */
+function testDatabaseBase(array $devEnv): string
+{
+    $name = isMysqlConnection($devEnv) ? rtrim(substr(databaseBase($devEnv), 0, 16), '_-') : '';
+
+    return $name !== '' ? "{$name}_test" : 'testing';
+}
+
+/**
+ * The values phpunit.xml's (else phpunit.xml.dist's) <env> and <server>
+ * elements set, the first for each name, ignoring commented-out ones. Same
+ * as phpunit_value() in _worktree-lib.sh.
+ *
+ * @return array<string, string>
+ */
+function phpunitSettings(string $dir): array
+{
+    $file = file_exists("$dir/phpunit.xml") ? "$dir/phpunit.xml" : "$dir/phpunit.xml.dist";
+    if (! file_exists($file)) {
+        return [];
+    }
+
+    $xml = preg_replace('/<!--.*?(-->|$)/s', '', (string) file_get_contents($file)) ?? '';
+    preg_match_all('/<(?:env|server)\s[^>]*>/', $xml, $elements);
+    $settings = [];
+    foreach ($elements[0] as $element) {
+        $name = xmlAttribute($element, 'name');
+        if ($name !== null && ! isset($settings[$name])) {
+            $settings[$name] = xmlAttribute($element, 'value') ?? '';
+        }
+    }
+
+    return $settings;
+}
+
+function xmlAttribute(string $element, string $name): ?string
+{
+    return preg_match('/\s' . $name . '\s*=\s*(["\'])(.*?)\1/s', $element, $m) === 1 ? $m[2] : null;
 }
 
 function isMysqlConnection(array $env): bool

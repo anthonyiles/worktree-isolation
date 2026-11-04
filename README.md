@@ -4,7 +4,7 @@ Make every `git worktree` of a PHP project ready to use the moment it's created,
 
 After a one-off install, `git worktree add` automatically:
 
-- copies `.env` and `.env.testing` from the main checkout
+- copies `.env` (and `.env.testing`, if you have one) from the main checkout
 - gives the worktree its own MySQL/MariaDB test and development databases, so parallel worktrees (and AI agents running migrations in them) never touch each other's data or the main checkout's
 - runs `composer install`, and your JavaScript package manager's install when there's a `package.json`
 
@@ -60,17 +60,18 @@ vendor/bin/worktree clean                     # drop databases of removed worktr
 
 Tip: `alias worktree='vendor/bin/worktree'`.
 
-> **With Sail or Docker Compose, don't call `sail` or `docker compose` directly inside a worktree.** They exec into whichever container is already running, which is usually mounted on the main checkout, so commands run against the wrong code and database. `vendor/bin/worktree` always targets the current worktree.
+> **With Sail or Docker Compose, don't call `sail` or `docker compose` directly inside a worktree, including from git hooks.** They exec into whichever container is already running, which is usually mounted on the main checkout, so commands run against the wrong code and database (a pre-commit `sail pint --dirty` formats the main checkout's files). `vendor/bin/worktree` always targets the current worktree; in a hook, use it when `.git` is a file. `install` and `setup` warn about hooks that call `sail`.
 
 ## What setup does
 
-1. Copies `.env` and `.env.testing` (or `.env.testing.example`) from the main checkout, if the worktree doesn't have them.
-2. Points both at the worktree's own databases (see below), before anything else runs.
+1. Copies `.env` and, if the project has one, `.env.testing` (or `.env.testing.example`) from the main checkout, if the worktree doesn't have them.
+2. Points them at the worktree's own databases (see below), before anything else runs.
 3. Docker Compose only: starts the worktree's own stack with `docker compose -p <project>-<worktree> up -d`.
 4. Runs `composer install`.
 5. Creates the test and development databases. A new development database is migrated and seeded; an existing one is only migrated.
 6. If there's a `package.json`, runs `npm install` (or `pnpm`, `yarn` or `bun`, by lockfile). A failure here only warns.
-7. Runs `vendor/bin/worktree prune` without fetching.
+7. Runs `WORKTREE_POST_SETUP_COMMAND`, if set (e.g. `npm run build`, so tests that render `@vite` find a manifest). A failure here only warns.
+8. Runs `vendor/bin/worktree prune` without fetching.
 
 `prune` finds worktrees whose branch is merged into origin's default branch, or `WORKTREE_PRUNE_BRANCH` (squash merges included), and removes them with their Compose stacks and databases. Branches are kept, and so are worktrees with uncommitted changes.
 
@@ -80,13 +81,14 @@ Each worktree's databases are named after its directory:
 
 | | Main checkout | Worktree `feature-auth` |
 |---|---|---|
-| Test (`.env.testing`) | `testing` | `testing_wt_feature-auth` |
+| Test | (yours) | `myapp_test_wt_feature-auth` |
 | Development (`.env`) | `myapp` | `myapp_wt_feature-auth` |
 
-- Only MySQL/MariaDB connections are changed. SQLite and others are left alone.
-- The main checkout's test database name must contain `test`, and a worktree is never pointed at one of the main checkout's databases.
+- Both are named after the main checkout's `.env` `DB_DATABASE`, so no `.env.testing` is needed. The test database uses the connection and credentials your tests use: `phpunit.xml`, then `.env.testing`, then `.env`.
+- Only MySQL/MariaDB connections are changed. SQLite and others are left alone. A worktree is never pointed at one of the main checkout's databases.
 - Long names are shortened with a hash (test names to 40 characters, development names to 64).
-- The names are written into the worktree's env files, so `php artisan test`, `phpunit` and the like use them too. `vendor/bin/worktree test` also creates the test database if it's missing.
+- `vendor/bin/worktree test` passes the test database in the environment, and creates it if it's missing. A worktree's `.env.testing`, if any, gets the name too, so `php artisan test` and `phpunit` use it, unless `phpunit.xml` sets `DB_DATABASE`.
+- `phpunit.xml` must set `DB_DATABASE` (if at all) with `<env>` and no `force="true"`: a forced value or `<server>` overrides the worktree's.
 - `vendor/bin/worktree clean` drops the databases of removed worktrees (after asking; `--force` skips the prompt). `--all` drops every per-worktree database. The main checkout's databases are never dropped.
 
 ## Configuration
@@ -115,6 +117,8 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction   # empty to skip
 # WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction      # empty to skip
 
+# WORKTREE_POST_SETUP_COMMAND=npm run build   # run at the end of setup
+
 # WORKTREE_TESTING_ENV_FILE=.env.testing
 # WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
 
@@ -125,7 +129,7 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 
 Commands are run as you'd type them in a shell, so quoting works.
 
-**Docker notes.** Containers run as your host user, so files they create in the worktree stay yours. With Docker Compose, each worktree runs its own stack, so fixed host ports (e.g. `8080:80`) clash between worktrees: make them configurable (e.g. `${APP_PORT:-8080}:80`) if you run several at once. With the `docker-image` runtime, build the image first (`sail build` or `docker compose build`).
+**Docker notes.** Containers run as your host user, so files they create in the worktree stay yours. The main clone's `.git` directory is mounted too, so git and tools that use it (e.g. `pint --dirty`) work. With Docker Compose, each worktree runs its own stack, so fixed host ports (e.g. `8080:80`) clash between worktrees: make them configurable (e.g. `${APP_PORT:-8080}:80`) if you run several at once. With the `docker-image` runtime, build the image first (`sail build` or `docker compose build`).
 
 ## AI agents
 

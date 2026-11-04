@@ -196,6 +196,9 @@ create_env_config() {
         '# WORKTREE_PRUNE=ask'
         '# WORKTREE_PRUNE_BRANCH=develop'
         '# WORKTREE_PRUNE_ON_SETUP=true'
+        ''
+        '# Command run at the end of setup, e.g. to build assets for tests'
+        '# WORKTREE_POST_SETUP_COMMAND=npm run build'
     )
 
     printf '%s\n' "${lines[@]}" > "$env_file"
@@ -436,8 +439,9 @@ verify_git_version || exit 1
 # (the only Composer "bin"), which dispatches to the sibling scripts.
 create_env_config
 
-# 3. Configure git hooks
+# 3. Configure git hooks, and check the project's own
 configure_git_hooks
+warn_about_hooks_calling_sail "$PROJECT_DIR"
 
 # 4. Optionally tell AI agents to go through vendor/bin/worktree
 if [[ "$AGENTS" == true ]]; then

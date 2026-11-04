@@ -10,8 +10,6 @@ setup() {
 }
 
 @test "threads -p through the per-worktree-database branch" {
-    echo "TEST_DB_PER_WORKTREE=true" >> "$WORKTREE_DIR/.env.testing"
-
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
 
@@ -23,6 +21,8 @@ setup() {
 }
 
 @test "threads -p through the plain (no per-worktree database) branch" {
+    sed -i.bak 's/^DB_CONNECTION=.*/DB_CONNECTION=sqlite/' "$WORKTREE_DIR/.env.testing"
+
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
 
@@ -37,7 +37,7 @@ setup() {
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
 
-    run grep -F -- "[-f] [my compose.yml]" "$DOCKER_ARGV_LOG"
+    run grep -F -- "[-f] [$(pwd -P)/my compose.yml]" "$DOCKER_ARGV_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -48,7 +48,7 @@ setup() {
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
 
-    run grep -- " exec " "$DOCKER_LOG"
+    output="$(cat "$DOCKER_LOG")"
     [[ "$output" == *"-e MY_CUSTOM_FLAG=on"* ]]
     [[ "$output" == *"-e STRIPE_SECRET=sk_test_123"* ]]
     run grep -c -- "sk_test_123" "$DOCKER_ARGV_LOG"

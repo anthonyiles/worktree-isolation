@@ -37,7 +37,7 @@ if [[ "\$args" == *"DB_DATABASE=myapp_wt_"*"php -r"* ]]; then
     printf '%s' "$DEV_DB_NOISE"
     echo "myapp_wt_feature-auth $DEV_DB_STATE"
 elif [[ "\$args" == *"php -r"* ]]; then
-    echo "testing_wt_feature-auth created"
+    echo "myapp_test_wt_feature-auth created"
 fi
 exit 0
 SCRIPT
@@ -63,7 +63,7 @@ SCRIPT
     [ "$status" -eq 0 ]
 
     run grep "^up with" "$DOCKER_LOG"
-    [ "$output" = "up with DB_DATABASE=myapp_wt_feature-auth DB_DATABASE=testing_wt_feature-auth" ]
+    [ "$output" = "up with DB_DATABASE=myapp_wt_feature-auth DB_DATABASE=myapp_test_wt_feature-auth" ]
 }
 
 @test "derives from the main checkout's name when .env holds an old or blank one" {
@@ -139,7 +139,7 @@ ENV
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
     [ "$output" = "DB_DATABASE=myapp" ]
-    run grep -- "-e DB_DATABASE=myapp" "$DOCKER_LOG"
+    run grep -E -- "-e DB_DATABASE=myapp( |_wt_)" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
 
@@ -151,7 +151,7 @@ ENV
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
     [ "$output" = "DB_DATABASE=myapp" ]
-    run grep -- "-e DB_DATABASE=myapp" "$DOCKER_LOG"
+    run grep -E -- "-e DB_DATABASE=myapp( |_wt_)" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
 
@@ -171,8 +171,8 @@ ENV
     [ "$status" -eq 0 ]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
-    [ "$output" = "DB_DATABASE=testing_wt_feature-auth" ]
-    run grep -- "-e DB_DATABASE=testing_wt_feature-auth .* php -r" "$DOCKER_LOG"
+    [ "$output" = "DB_DATABASE=myapp_test_wt_feature-auth" ]
+    run grep -- "-e DB_DATABASE=myapp_test_wt_feature-auth .* php -r" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -189,18 +189,17 @@ SCRIPT
     [[ "$output" == *"vendor/bin/worktree test will create it on first run"* ]]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
-    [ "$output" = "DB_DATABASE=testing_wt_feature-auth" ]
+    [ "$output" = "DB_DATABASE=myapp_test_wt_feature-auth" ]
 }
 
-@test "blanks .env.testing when the main test database name has no \"test\" in it" {
-    sed -i.bak 's/^DB_DATABASE=.*/DB_DATABASE=myapp/' "$MAIN_REPO/.env.testing" "$WORKTREE_DIR/.env.testing"
+@test "names the test database after the main checkout's .env, not the testing env file" {
+    sed -i.bak 's/^DB_DATABASE=.*/DB_DATABASE=other_testing/' "$MAIN_REPO/.env.testing" "$WORKTREE_DIR/.env.testing"
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Could not derive a test database name"* ]]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
-    [ "$output" = "DB_DATABASE=" ]
+    [ "$output" = "DB_DATABASE=myapp_test_wt_feature-auth" ]
 }
 
 @test "blanks .env when no safe development database name can be derived" {
@@ -212,7 +211,7 @@ SCRIPT
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
     [ "$output" = "DB_DATABASE=" ]
-    run grep -- "-e DB_DATABASE=myapp" "$DOCKER_LOG"
+    run grep -E -- "-e DB_DATABASE=myapp( |_wt_)" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
 
@@ -243,7 +242,7 @@ if [[ "\$args" == *"php -r"* ]]; then
     if [[ "\$args" == *"DB_DATABASE=myapp_wt_"* ]]; then
         echo "myapp_wt_feature-auth created"
     else
-        echo "testing_wt_feature-auth created"
+        echo "myapp_test_wt_feature-auth created"
     fi
 fi
 exit 0
@@ -254,4 +253,25 @@ SCRIPT
     [[ "$output" != *"Could not create the test database"* ]]
     run grep -- "-T app bash -c php artisan db:seed --no-interaction" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
+}
+
+@test "creates the test database without a testing env file, taking its settings from .env" {
+    rm "$WORKTREE_DIR/.env.testing" "$MAIN_REPO/.env.testing"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Using test database myapp_test_wt_feature-auth"* ]]
+    [[ "$output" != *"not found"* ]]
+    [ ! -e "$WORKTREE_DIR/.env.testing" ]
+
+    run grep -- "-e DB_DATABASE=myapp_test_wt_feature-auth -e DB_HOST=mysql .*-e DB_PASSWORD=secret app php -r" "$DOCKER_LOG"
+    [ "$status" -eq 0 ]
+}
+
+@test "warns when phpunit.xml overrides the worktree's test database with <server>" {
+    echo '<phpunit><php><server name="DB_DATABASE" value="testing"/></php></phpunit>' > "$WORKTREE_DIR/phpunit.xml"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"so tests ignore this"* ]]
 }

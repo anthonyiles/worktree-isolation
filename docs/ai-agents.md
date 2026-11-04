@@ -1,7 +1,7 @@
 # Working in Git Worktrees (for AI Agents)
 
 This project uses `anthonyiles/worktree-isolation`. Each git worktree gets its own
-Composer and npm dependencies, its own `.env` / `.env.testing`, and its own test and
+Composer and npm dependencies, its own env files, and its own test and
 development databases. That isolation only holds if commands run through
 `vendor/bin/worktree`.
 
@@ -28,7 +28,8 @@ Inside a worktree, prefix every project command with `vendor/bin/worktree`:
 | `php artisan migrate`, `sail artisan tinker` | `vendor/bin/worktree php artisan migrate`, `vendor/bin/worktree php artisan tinker` |
 | `docker compose exec app ...` | `vendor/bin/worktree ...` |
 
-Git commands, file edits and read-only tools (`grep`, `ls`) need no prefix.
+Git commands, file edits and read-only tools (`grep`, `ls`) need no prefix. Tools that use
+git, like `vendor/bin/worktree php vendor/bin/pint --dirty`, work through the prefix too.
 
 ## Why
 
@@ -37,6 +38,9 @@ container is already running, which is often bind-mounted to the main checkout o
 different worktree. The command then reads that checkout's code and `.env.testing`
 and migrates or wipes its database. `vendor/bin/worktree` resolves the runtime
 (native, Docker Compose, Sail/standalone image) for the current worktree every time.
+
+Git hooks that call `sail` have the same problem. If setup warns about one, tell the
+user rather than committing around it.
 
 ## Creating a worktree
 
@@ -57,7 +61,8 @@ Setup may list merged worktrees it could remove. Leave them: don't run
   the worktree, run the main checkout's copy:
   `"$(git rev-parse --path-format=absolute --git-common-dir)/../vendor/bin/worktree" setup`
 - **Tests hit the wrong database, or env files are missing**: run
-  `vendor/bin/worktree setup` again. It is safe to repeat.
+  `vendor/bin/worktree setup` again. It is safe to repeat. Only
+  `vendor/bin/worktree test` is sure to use the worktree's test database.
 - **`Error: this is the main checkout`**: you are not in a worktree, so run the
   command without the prefix.
 

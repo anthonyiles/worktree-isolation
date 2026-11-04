@@ -77,7 +77,7 @@ SCRIPT
 
     run "$DISPATCH_DIR/worktree" clean
     [ "$status" -eq 0 ]
-    [ "$(cat "$LOG")" = "worktree-clean --keep=app_testing_wt_feature-auth,myapp_wt_feature-auth" ]
+    [ "$(cat "$LOG")" = "worktree-clean --keep=myapp_test_wt_feature-auth,myapp_wt_feature-auth" ]
 }
 
 @test "delegates 'prune' to worktree-prune with args forwarded" {

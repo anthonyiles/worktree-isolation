@@ -65,6 +65,9 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_PRUNE=ask
 # WORKTREE_PRUNE_BRANCH=develop
 # WORKTREE_PRUNE_ON_SETUP=true
+
+# Command run at the end of setup, e.g. to build assets for tests
+# WORKTREE_POST_SETUP_COMMAND=npm run build
 ENV
 }
 
@@ -247,4 +250,14 @@ common_settings)" ]
     run run_install --agents
     [ "$status" -eq 0 ]
     [ "$(sed -n 1,3p "$PROJECT_DIR/AGENTS.md")" = "$(printf '# Mine\n\n<!-- worktree-isolation:start -->')" ]
+}
+
+@test "warns about project git hooks that call sail" {
+    printf '#!/bin/sh\nvendor/bin/sail php vendor/bin/pint --dirty\n' > "$PROJECT_DIR/.git/hooks/pre-commit"
+
+    run run_install
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Warning: these git hooks call sail or docker compose"* ]]
+    [[ "$output" == *"  .git/hooks/pre-commit"* ]]
+    [[ "$output" != *"  git config hook."* ]]
 }

@@ -46,7 +46,7 @@ setup() {
     run bash "$STUBS_DIR/worktree" php -v
     [ "$status" -eq 0 ]
 
-    run grep -F -- "[-f] [my compose.yml]" "$DOCKER_ARGV_LOG"
+    run grep -F -- "[-f] [$(pwd -P)/my compose.yml]" "$DOCKER_ARGV_LOG"
     [ "$status" -eq 0 ]
 }
 
