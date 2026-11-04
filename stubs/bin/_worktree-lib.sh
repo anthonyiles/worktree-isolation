@@ -103,6 +103,14 @@ validate_runtime() {
                 echo "Build it first (e.g. 'docker compose build' or 'vendor/bin/sail build')." >&2
                 exit 1
             fi
+            local pair pairs=()
+            read -ra pairs <<< "${WORKTREE_DOCKER_ENV:-}"
+            for pair in ${pairs[@]+"${pairs[@]}"}; do
+                if [[ ! "$pair" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+                    echo "Error: WORKTREE_DOCKER_ENV entry '$pair' isn't KEY=value." >&2
+                    exit 1
+                fi
+            done
             ;;
         *)
             echo "Error: Unknown WORKTREE_RUNTIME '$RUNTIME'. Use: native, docker-compose, or docker-image." >&2
@@ -523,14 +531,21 @@ normalize_path() {
     echo "/${out[*]+"${out[*]}"}"
 }
 
+# WORKTREE_DOCKER_ENV's values are exported and passed by name, as
+# run_in_runtime does, so they stay out of a process listing.
 build_docker_image_args() {
-    local git_dir
+    local git_dir pair pairs=()
     DOCKER_ARGS=(
         docker run --rm
         "${CONTAINER_USER_ARGS[@]}"
         "${CONTAINER_GIT_ENV[@]}"
-        -v "$PROJECT_ROOT:$WORKDIR"
     )
+    read -ra pairs <<< "${WORKTREE_DOCKER_ENV:-}"
+    for pair in ${pairs[@]+"${pairs[@]}"}; do
+        export "${pair?}"
+        DOCKER_ARGS+=(-e "${pair%%=*}")
+    done
+    DOCKER_ARGS+=(-v "$PROJECT_ROOT:$WORKDIR")
     # Read-write: git add, stash and the like write to the index.
     git_dir="$(container_git_dir "$WORKDIR")"
     if [[ -n "$git_dir" ]]; then

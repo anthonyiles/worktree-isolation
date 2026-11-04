@@ -113,6 +113,7 @@ WORKTREE_RUNTIME=native
 # WORKTREE_DOCKER_IMAGE=sail-8.4/app
 # WORKTREE_DOCKER_NETWORK=myproject_sail
 # WORKTREE_DOCKER_WORKDIR=/var/www/html
+# WORKTREE_DOCKER_ENV="PHPSTAN_MAX_PROCESSES=4"   # KEY=value pairs passed to every container
 
 # Per-worktree development databases (false or unset: worktrees share the main checkout's)
 WORKTREE_DEV_DB_PER_WORKTREE=true

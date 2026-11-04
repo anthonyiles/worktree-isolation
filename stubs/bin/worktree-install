@@ -177,6 +177,8 @@ create_env_config() {
             "WORKTREE_DOCKER_IMAGE=$image"
             "WORKTREE_DOCKER_NETWORK=$network"
             '# WORKTREE_DOCKER_WORKDIR=/var/www/html'
+            '# Passed to every container, e.g. what your compose service sets'
+            '# WORKTREE_DOCKER_ENV="PHPSTAN_MAX_PROCESSES=4"'
         )
     fi
 

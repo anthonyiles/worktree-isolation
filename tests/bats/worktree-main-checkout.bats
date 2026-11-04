@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 #
-# Passthrough from the main checkout (WORKTREE_MAIN_CHECKOUT_PASSTHROUGH) and
-# running directly when already inside the runtime, using a fake `docker`
-# executable so no real Docker daemon is needed.
+# Passthrough from the main checkout (WORKTREE_MAIN_CHECKOUT_PASSTHROUGH),
+# running directly when already inside the runtime, and WORKTREE_DOCKER_ENV,
+# using a fake `docker` executable so no real Docker daemon is needed.
 
 load helpers
 
@@ -169,4 +169,52 @@ $MAIN_REAL: -v" ]
         [ ! -e "$PHP_RUN_LOG" ]
         [ "$(cat "$MAIN_REPO/.env.testing")" = "$(cat "$WORKTREE_DIR/.env.testing")" ]
     done
+}
+
+@test "WORKTREE_DOCKER_ENV reaches every container by name, in worktrees and the main checkout" {
+    use_runtime docker-image
+    echo 'WORKTREE_DOCKER_ENV="PHPSTAN_MAX_PROCESSES=4 FOO=a=b"' >> "$WORKTREE_DIR/.worktree-isolation.env"
+    log_docker_argv
+
+    run bash "$STUBS_DIR/worktree" php -v
+    [ "$status" -eq 0 ]
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 0 ]
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    use_main_checkout
+    enable_main_checkout
+    run bash "$STUBS_DIR/worktree" php -v
+    [ "$status" -eq 0 ]
+
+    run grep -c -- "run " "$DOCKER_LOG"
+    runs="$output"
+    [ "$runs" -ge 4 ]
+    run grep -c -- "-e PHPSTAN_MAX_PROCESSES=4 -e FOO=a=b " "$DOCKER_LOG"
+    [ "$output" -eq "$runs" ]
+    run grep -c -F -- "[-e] [PHPSTAN_MAX_PROCESSES] [-e] [FOO]" "$DOCKER_ARGV_LOG"
+    [ "$output" -eq "$runs" ]
+}
+
+@test "test's testing environment wins over WORKTREE_DOCKER_ENV" {
+    use_runtime docker-image
+    echo 'WORKTREE_DOCKER_ENV="DB_DATABASE=other"' >> "$WORKTREE_DIR/.worktree-isolation.env"
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 0 ]
+
+    output="$(cat "$DOCKER_LOG")"
+    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth"* ]]
+    [[ "$output" != *"DB_DATABASE=other"* ]]
+}
+
+@test "rejects a WORKTREE_DOCKER_ENV entry that isn't KEY=value" {
+    use_runtime docker-image
+    echo 'WORKTREE_DOCKER_ENV="FOO=1 BAR"' >> "$WORKTREE_DIR/.worktree-isolation.env"
+
+    run bash "$STUBS_DIR/worktree" php -v
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"WORKTREE_DOCKER_ENV entry 'BAR' isn't KEY=value"* ]]
+    run grep -- "run " "$DOCKER_LOG"
+    [ "$status" -ne 0 ]
 }

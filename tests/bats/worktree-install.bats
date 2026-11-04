@@ -194,6 +194,8 @@ WORKTREE_RUNTIME=docker-image
 WORKTREE_DOCKER_IMAGE=app-img
 WORKTREE_DOCKER_NETWORK=app-net
 # WORKTREE_DOCKER_WORKDIR=/var/www/html
+# Passed to every container, e.g. what your compose service sets
+# WORKTREE_DOCKER_ENV="PHPSTAN_MAX_PROCESSES=4"
 ENV
 common_settings)" ]
 }
