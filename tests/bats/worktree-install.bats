@@ -68,6 +68,9 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 
 # Command run at the end of setup, e.g. to build assets for tests
 # WORKTREE_POST_SETUP_COMMAND=npm run build
+
+# Let vendor/bin/worktree <command> run in the main checkout too (e.g. for git hooks)
+# WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true
 ENV
 }
 

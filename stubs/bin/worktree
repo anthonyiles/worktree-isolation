@@ -81,9 +81,7 @@ case "$COMMAND" in
         set -- "$@" "--keep=$(in_use_databases)"
         # DB_HOST is often a Compose service name (e.g. "mysql") that only
         # resolves inside the Docker runtime, so clean runs there too.
-        # Already inside the runtime (e.g. `sail artisan worktree:clean`):
-        # DB_HOST resolves here, and there's no docker to reach it with.
-        if [[ "$RUNTIME" == native || "${LARAVEL_SAIL:-}" == 1 ]] || ! command -v docker > /dev/null 2>&1; then
+        if [[ "$RUNTIME" == native ]] || in_runtime; then
             exec php "$SCRIPT_DIR/worktree-clean" "$@"
         fi
         ROOT_REAL="$(cd -P "$PROJECT_ROOT" && pwd)"
@@ -98,12 +96,19 @@ case "$COMMAND" in
 esac
 
 # ---------------------------------------------------------------------------
-# Passthrough: run "$COMMAND $@" inside this worktree's runtime target.
+# Passthrough: run "$COMMAND $@" inside this checkout's runtime target.
 # ---------------------------------------------------------------------------
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/_worktree-lib.sh"
 load_worktree_config
-[[ "${ALLOW_MAIN_CHECKOUT:-}" == true ]] || require_worktree
+if [[ "${ALLOW_MAIN_CHECKOUT:-}" != true && "${WORKTREE_MAIN_CHECKOUT_PASSTHROUGH:-}" != true ]]; then
+    require_worktree "To run commands here too, set WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true in .worktree-isolation.env."
+fi
+# E.g. a git hook that fired inside Sail: run here rather than nesting containers.
+if in_runtime; then
+    cd "$PROJECT_ROOT"
+    exec "$COMMAND" "$@"
+fi
 validate_runtime
 
 # .env.testing is deliberately not loaded: passthrough runs against the app's
@@ -118,6 +123,9 @@ case "$RUNTIME" in
         ;;
 
     docker-compose)
+        if in_main_checkout; then
+            require_compose_service_running
+        fi
         EXEC_ARGS=("${COMPOSE_EXEC_ARGS[@]}")
         [[ "$IS_TTY" == true ]] || EXEC_ARGS+=(-T)
         exec "${EXEC_ARGS[@]}" "$COMPOSE_SERVICE" "$COMMAND" "$@"

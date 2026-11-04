@@ -13,7 +13,8 @@ test -f .git && echo worktree || echo main checkout
 
 In a worktree `.git` is a file pointing at the main repository. In the main checkout
 it is a directory, and commands run as usual there. `vendor/bin/worktree` refuses to
-pass commands through from the main checkout.
+pass commands through from the main checkout unless `.worktree-isolation.env` sets
+`WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true`.
 
 ## The rule
 

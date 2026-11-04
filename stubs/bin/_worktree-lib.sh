@@ -46,9 +46,27 @@ in_main_checkout() {
     [[ "$(git rev-parse --path-format=absolute --git-dir)" == "$(git rev-parse --path-format=absolute --git-common-dir)" ]]
 }
 
+# Usage: require_worktree [hint]
 require_worktree() {
     if in_main_checkout; then
         echo "Error: this is the main checkout, not a git worktree. Run this from inside a worktree." >&2
+        [[ -z "${1:-}" ]] || echo "$1" >&2
+        exit 1
+    fi
+}
+
+# Already inside the runtime (e.g. a hook run in Sail, or
+# `sail artisan worktree:clean`): there's no docker to reach it with, and no
+# need to.
+in_runtime() {
+    [[ "${LARAVEL_SAIL:-}" == 1 ]] || ! command -v docker > /dev/null 2>&1
+}
+
+# The main checkout's stack is the user's own: commands go into it, but it's
+# never started for them.
+require_compose_service_running() {
+    if ! "${COMPOSE_ARGS[@]}" ps --status running --services 2> /dev/null | grep -qxF "$COMPOSE_SERVICE"; then
+        echo "Error: the '$COMPOSE_SERVICE' service isn't running in the main checkout's stack. Start it first (e.g. docker compose up -d)." >&2
         exit 1
     fi
 }
@@ -675,6 +693,6 @@ warn_about_hooks_calling_sail() {
     if [[ ${#found[@]} -gt 0 ]]; then
         echo "Warning: these git hooks call sail or docker compose, which in a worktree run in the main checkout's container:" >&2
         printf '  %s\n' "${found[@]}" >&2
-        echo "  In a worktree ([ -f .git ]), run those commands through vendor/bin/worktree instead." >&2
+        echo "  Run those commands through vendor/bin/worktree instead. To use it in the main checkout too, set WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true." >&2
     fi
 }

@@ -32,6 +32,7 @@ SCRIPT
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
 "$FAKE_BIN/docker-args" "\$@" >> "$DOCKER_LOG"
+[[ " \$* " != *" ps --status running "* ]] || echo "\${FAKE_RUNNING_SERVICES-app}"
 exit 0
 SCRIPT
     chmod +x "$FAKE_BIN/docker"
@@ -74,8 +75,37 @@ log_docker_argv() {
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
 "$FAKE_BIN/docker-args" "\$@" >> "$DOCKER_LOG"
+[[ " \$* " != *" ps --status running "* ]] || echo "\${FAKE_RUNNING_SERVICES-app}"
 printf '[%s] ' "\$@" >> "$DOCKER_ARGV_LOG"
 echo >> "$DOCKER_ARGV_LOG"
 exit 0
 SCRIPT
+}
+
+# Moves the worktree's config into the main checkout and works from there.
+use_main_checkout() {
+    cp "$WORKTREE_DIR/.worktree-isolation.env" "$MAIN_REPO/"
+    cd "$MAIN_REPO" || return 1
+}
+
+# A fake `php` that logs where it ran and with what, for commands run directly
+# on the host or inside the runtime.
+fake_php() {
+    PHP_RUN_LOG="$BATS_TEST_TMPDIR/php-run.log"
+    cat > "$FAKE_BIN/php" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$(pwd -P): \$*" >> "$PHP_RUN_LOG"
+SCRIPT
+    chmod +x "$FAKE_BIN/php"
+}
+
+# A PATH with the fakes and the basics but no docker, as inside a container.
+path_without_docker() {
+    local dir="$BATS_TEST_TMPDIR/nodocker" tool
+    mkdir -p "$dir"
+    for tool in bash git env sed grep cat dirname basename id tr cut mktemp awk readlink pwd; do
+        [[ -e "$dir/$tool" ]] || ln -s "$(command -v "$tool")" "$dir/$tool"
+    done
+    [[ ! -e "$FAKE_BIN/php" ]] || ln -sf "$FAKE_BIN/php" "$dir/php"
+    echo "$dir"
 }
