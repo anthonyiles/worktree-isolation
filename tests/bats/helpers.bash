@@ -33,6 +33,10 @@ SCRIPT
 #!/usr/bin/env bash
 "$FAKE_BIN/docker-args" "\$@" >> "$DOCKER_LOG"
 [[ " \$* " != *" ps --status running "* ]] || echo "\${FAKE_RUNNING_SERVICES-app}"
+if [[ " \$* " == *" compose "*"config "* ]]; then
+    [[ -z "\${FAKE_COMPOSE_CONFIG_FAILS:-}" ]] || exit 1
+    cat "\${FAKE_COMPOSE_CONFIG:-/dev/null}"
+fi
 exit 0
 SCRIPT
     chmod +x "$FAKE_BIN/docker"
@@ -76,6 +80,10 @@ log_docker_argv() {
 #!/usr/bin/env bash
 "$FAKE_BIN/docker-args" "\$@" >> "$DOCKER_LOG"
 [[ " \$* " != *" ps --status running "* ]] || echo "\${FAKE_RUNNING_SERVICES-app}"
+if [[ " \$* " == *" compose "*"config "* ]]; then
+    [[ -z "\${FAKE_COMPOSE_CONFIG_FAILS:-}" ]] || exit 1
+    cat "\${FAKE_COMPOSE_CONFIG:-/dev/null}"
+fi
 printf '[%s] ' "\$@" >> "$DOCKER_ARGV_LOG"
 echo >> "$DOCKER_ARGV_LOG"
 exit 0

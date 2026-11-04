@@ -194,7 +194,10 @@ WORKTREE_RUNTIME=docker-image
 WORKTREE_DOCKER_IMAGE=app-img
 WORKTREE_DOCKER_NETWORK=app-net
 # WORKTREE_DOCKER_WORKDIR=/var/www/html
-# Passed to every container, e.g. what your compose service sets
+# Containers get the environment of the compose service using the image;
+# name another service, or leave it empty for none
+# WORKTREE_DOCKER_SERVICE=laravel.test
+# More KEY=value pairs passed to every container
 # WORKTREE_DOCKER_ENV="PHPSTAN_MAX_PROCESSES=4"
 ENV
 common_settings)" ]
