@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.0](https://github.com/anthonyiles/worktree-isolation/compare/v0.6.0...v0.7.0) (2026-11-04)
+
+
+### Features
+
+* add worktree prune to remove merged worktrees ([34bc4f4](https://github.com/anthonyiles/worktree-isolation/commit/34bc4f45a36d59c928cb59301d36f54fc38b6438))
+* make the branch prune checks against configurable ([4684780](https://github.com/anthonyiles/worktree-isolation/commit/468478089e17240cf8110eb3620dbe8965af2498))
+* run a project's own command at the end of setup ([6b46b53](https://github.com/anthonyiles/worktree-isolation/commit/6b46b539e68bc88d50a5c365090f51aec1a7d192))
+* warn about project git hooks that call sail ([038c1b9](https://github.com/anthonyiles/worktree-isolation/commit/038c1b9c9ba5a3523b795df248cec34dd4cee531))
+
+
+### Bug Fixes
+
+* make git work inside the Docker runtimes ([097ff02](https://github.com/anthonyiles/worktree-isolation/commit/097ff02cb80c7655387411ea39b0851e39bd3dc6))
+* name per-worktree test databases without needing .env.testing ([69087d1](https://github.com/anthonyiles/worktree-isolation/commit/69087d18dbf864a115a73e7e4600358d6b057ac0))
+
 ## [0.6.0](https://github.com/anthonyiles/worktree-isolation/releases/tag/v0.6.0) (2026-11-02)
 
 
