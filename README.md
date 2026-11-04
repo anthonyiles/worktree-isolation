@@ -54,7 +54,8 @@ vendor/bin/worktree php artisan migrate       # anything else runs in this workt
 vendor/bin/worktree composer require foo/bar
 vendor/bin/worktree npm run dev
 vendor/bin/worktree setup                     # re-run setup, e.g. after fixing DB settings
-vendor/bin/worktree clean --stale             # drop databases of removed worktrees
+vendor/bin/worktree prune                     # remove merged worktrees, their stacks and databases
+vendor/bin/worktree clean                     # drop databases of removed worktrees
 ```
 
 Tip: `alias worktree='vendor/bin/worktree'`.
@@ -69,6 +70,9 @@ Tip: `alias worktree='vendor/bin/worktree'`.
 4. Runs `composer install`.
 5. Creates the test and development databases. A new development database is migrated and seeded; an existing one is only migrated.
 6. If there's a `package.json`, runs `npm install` (or `pnpm`, `yarn` or `bun`, by lockfile). A failure here only warns.
+7. Runs `vendor/bin/worktree prune` without fetching.
+
+`prune` finds worktrees whose branch is merged into origin's default branch (squash merges included), and removes them with their Compose stacks and databases. Branches are kept, and so are worktrees with uncommitted changes.
 
 ## Databases
 
@@ -83,7 +87,7 @@ Each worktree's databases are named after its directory:
 - The main checkout's test database name must contain `test`, and a worktree is never pointed at one of the main checkout's databases.
 - Long names are shortened with a hash (test names to 40 characters, development names to 64).
 - The names are written into the worktree's env files, so `php artisan test`, `phpunit` and the like use them too. `vendor/bin/worktree test` also creates the test database if it's missing.
-- `vendor/bin/worktree clean` drops all per-worktree databases (after asking; `--force` skips the prompt). `--stale` only drops those whose worktree has been removed. The main checkout's databases are never dropped.
+- `vendor/bin/worktree clean` drops the databases of removed worktrees (after asking; `--force` skips the prompt). `--all` drops every per-worktree database. The main checkout's databases are never dropped.
 
 ## Configuration
 
@@ -113,6 +117,9 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 
 # WORKTREE_TESTING_ENV_FILE=.env.testing
 # WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
+
+# WORKTREE_PRUNE=ask             # report | ask | remove merged worktrees
+# WORKTREE_PRUNE_ON_SETUP=true   # false: setup doesn't run prune
 ```
 
 Commands are run as you'd type them in a shell, so quoting works.

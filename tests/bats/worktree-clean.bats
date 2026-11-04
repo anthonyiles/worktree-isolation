@@ -14,7 +14,7 @@ setup() {
 }
 
 run_clean() {
-    php "$STUBS_DIR/worktree-clean" --project-dir="$PROJECT_DIR" --force
+    php "$STUBS_DIR/worktree-clean" --project-dir="$PROJECT_DIR" --keep= --force
 }
 
 @test "skips a SQLite test database and still tries the development one" {
@@ -42,29 +42,28 @@ run_clean() {
     [[ "$output" == *"Could not connect to the test database server at 127.0.0.1:1"* ]]
 }
 
-@test "--stale refuses to guess when it can't list the worktrees" {
-    not_a_repo="$BATS_TEST_TMPDIR/not-a-repo"
-    mkdir -p "$not_a_repo"
-    cp "$PROJECT_DIR/.worktree-isolation.env" "$PROJECT_DIR/.env" "$not_a_repo/"
-
-    run php "$STUBS_DIR/worktree-clean" --project-dir="$not_a_repo" --stale --force
+@test "refuses to run without the databases to keep, unless --all" {
+    run php "$STUBS_DIR/worktree-clean" --project-dir="$PROJECT_DIR" --force
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Could not list this repository's worktrees"* ]]
-    [[ "$output" != *"Dropped"* ]]
+    [[ "$output" == *"--keep is required without --all"* ]]
+    [[ "$output" != *"Could not connect"* ]]
+
+    run php "$STUBS_DIR/worktree-clean" --project-dir="$PROJECT_DIR" --all --force
+    [[ "$output" == *"Could not connect to the development database server"* ]]
 }
 
 @test "rejects an unknown option instead of ignoring it" {
     printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=testing\n' > "$PROJECT_DIR/.env.testing"
 
-    run php "$STUBS_DIR/worktree-clean" --project-dir="$PROJECT_DIR" --stael --force
+    run php "$STUBS_DIR/worktree-clean" --project-dir="$PROJECT_DIR" --keep= --alll --force
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Unknown option '--stael'"* ]]
+    [[ "$output" == *"Unknown option '--alll'"* ]]
     [[ "$output" == *"Usage: vendor/bin/worktree clean"* ]]
     [[ "$output" != *"Could not connect"* ]]
 }
 
 @test "takes --project-dir's value as a separate argument" {
-    run php "$STUBS_DIR/worktree-clean" --project-dir "$PROJECT_DIR" --force
+    run php "$STUBS_DIR/worktree-clean" --project-dir "$PROJECT_DIR" --keep= --force
     [ "$status" -eq 1 ]
     [[ "$output" == *"Could not connect to the development database server"* ]]
 }
@@ -85,7 +84,7 @@ run_clean() {
     cp "$PROJECT_DIR/.worktree-isolation.env" "$worktree/"
     printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=testing_wt_feature\n' > "$worktree/.env.testing"
 
-    run php "$STUBS_DIR/worktree-clean" --project-dir="$worktree" --force
+    run php "$STUBS_DIR/worktree-clean" --project-dir="$worktree" --keep= --force
     [[ "$output" == *"development database server"* ]]
     [[ "$output" != *"test database server"* ]]
 }

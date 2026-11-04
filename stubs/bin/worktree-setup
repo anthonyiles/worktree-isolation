@@ -243,6 +243,16 @@ if [[ -f "$PROJECT_ROOT/package.json" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 8. Prune merged worktrees
+# ---------------------------------------------------------------------------
+# Without a fetch, so `git worktree add` never waits on the network, and
+# without failing setup.
+if [[ "${WORKTREE_PRUNE_ON_SETUP:-true}" == true ]]; then
+    echo ""
+    bash "$SCRIPT_DIR/worktree-prune" --no-fetch || true
+fi
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 echo ""

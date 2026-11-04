@@ -48,6 +48,9 @@ A post-checkout hook bootstraps the new worktree automatically: dependencies, en
 files and per-worktree databases. Don't copy `.env` files or run `composer install`
 yourself.
 
+Setup may list merged worktrees it could remove. Leave them: don't run
+`vendor/bin/worktree prune` unless asked, since other worktrees may be in use.
+
 ## When something looks wrong
 
 - **`vendor/` is missing in the worktree**: the bootstrap didn't run or failed. From

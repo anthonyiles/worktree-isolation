@@ -8,6 +8,7 @@
 #   vendor/bin/worktree setup               -> worktree-setup
 #   vendor/bin/worktree test [args...]      -> test
 #   vendor/bin/worktree clean [args...]     -> worktree-clean
+#   vendor/bin/worktree prune [args...]     -> worktree-prune
 #
 # Anything else is passed straight through into this worktree's configured
 # runtime (native host, docker-compose service, or docker-image container) —
@@ -41,7 +42,7 @@ SCRIPT_DIR="$(resolve_script_dir)"
 usage() {
     echo "Usage: vendor/bin/worktree <command> [args...]"
     echo ""
-    echo "Known commands: install, setup, test, clean"
+    echo "Known commands: install, setup, test, clean, prune"
     echo "Anything else runs inside this worktree's configured runtime"
     echo "(e.g. composer install, npm run dev, php artisan migrate)."
 }
@@ -68,17 +69,21 @@ case "$COMMAND" in
     test)
         exec bash "$SCRIPT_DIR/test" "$@"
         ;;
+    prune)
+        exec bash "$SCRIPT_DIR/worktree-prune" "$@"
+        ;;
     clean)
+        # shellcheck disable=SC1091
+        source "$SCRIPT_DIR/_worktree-lib.sh"
+        load_worktree_config
+        # Worktrees are listed here, on the host: inside a container git
+        # can't see them.
+        set -- "$@" "--keep=$(in_use_databases)"
         # DB_HOST is often a Compose service name (e.g. "mysql") that only
         # resolves inside the Docker runtime, so clean runs there too.
-        if git rev-parse --show-toplevel > /dev/null 2>&1; then
-            # shellcheck disable=SC1091
-            source "$SCRIPT_DIR/_worktree-lib.sh"
-            load_worktree_config
-        fi
         # Already inside the runtime (e.g. `sail artisan worktree:clean`):
         # DB_HOST resolves here, and there's no docker to reach it with.
-        if [[ "${RUNTIME:-native}" == native || "${LARAVEL_SAIL:-}" == 1 ]] || ! command -v docker > /dev/null 2>&1; then
+        if [[ "$RUNTIME" == native || "${LARAVEL_SAIL:-}" == 1 ]] || ! command -v docker > /dev/null 2>&1; then
             exec php "$SCRIPT_DIR/worktree-clean" "$@"
         fi
         ROOT_REAL="$(cd -P "$PROJECT_ROOT" && pwd)"

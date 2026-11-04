@@ -65,13 +65,7 @@ validate_runtime() {
             COMPOSE_ARGS=(docker compose)
             # The main checkout's stack runs under Compose's default project name.
             if ! in_main_checkout; then
-                local base="${WORKTREE_COMPOSE_PROJECT_BASE:-}"
-                if [[ -z "$base" ]]; then
-                    # Configs written before install recorded this: fall back to
-                    # what install derives, the main checkout's directory name.
-                    base="$(slugify "$(basename "$(main_checkout_dir)")")"
-                fi
-                COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$base" "$WORKTREE_BASENAME")"
+                COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$(compose_project_base)" "$WORKTREE_BASENAME")"
                 COMPOSE_ARGS+=(-p "$COMPOSE_PROJECT_NAME")
             fi
             if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
@@ -132,6 +126,16 @@ derive_compose_project_name() {
     echo "$1-$(slugify "$2")"
 }
 
+compose_project_base() {
+    if [[ -n "${WORKTREE_COMPOSE_PROJECT_BASE:-}" ]]; then
+        echo "$WORKTREE_COMPOSE_PROJECT_BASE"
+    else
+        # Configs written before install recorded this: fall back to what
+        # install derives, the main checkout's directory name.
+        slugify "$(basename "$(main_checkout_dir)")"
+    fi
+}
+
 sha1_hex() {
     if command -v sha1sum >/dev/null 2>&1; then
         printf '%s' "$1" | sha1sum | cut -d' ' -f1
@@ -140,9 +144,8 @@ sha1_hex() {
     fi
 }
 
-# Must match WorktreeDatabaseResolver::derive(), which clean --stale uses.
-# Setup and test derive names here, before the stack starts, and PHP only
-# creates them. An overlong suffix is truncated and tagged with a hash of the
+# Must match WorktreeDatabaseResolver::derive(). Setup and test derive names
+# here, before the stack starts, and PHP only creates them. An overlong suffix is truncated and tagged with a hash of the
 # full suffix, as in WorktreeDatabaseResolver::fit(). Lengths count bytes,
 # like PHP's strlen().
 derive_worktree_database_name() {
@@ -171,6 +174,95 @@ derive_test_database_name() {
     local base="${1%%_wt_*}"
     [[ "$(printf '%s' "$base" | LC_ALL=C tr '[:upper:]' '[:lower:]')" == *test* ]] || return 1
     derive_worktree_database_name "$base" "$2" 40
+}
+
+# Fills WT_PATHS, WT_BRANCHES and WT_STATES from `git worktree list`, one
+# entry per linked worktree (the main checkout is left out). A branch is
+# empty for a detached HEAD; a state is "locked", "prunable" (its directory
+# is gone) or empty.
+# shellcheck disable=SC2034 # the arrays are read by the callers
+load_worktree_list() {
+    local list line i=-1
+    list="$(git worktree list --porcelain)"
+    WT_PATHS=()
+    WT_BRANCHES=()
+    WT_STATES=()
+    while IFS= read -r line; do
+        case "$line" in
+            "worktree "*)
+                i=$((i + 1))
+                WT_PATHS[i]="${line#worktree }"
+                WT_BRANCHES[i]=""
+                WT_STATES[i]=""
+                ;;
+            "branch refs/heads/"*)
+                WT_BRANCHES[i]="${line#branch refs/heads/}"
+                ;;
+            locked | "locked "*)
+                WT_STATES[i]=locked
+                ;;
+            prunable | "prunable "*)
+                [[ "${WT_STATES[i]}" == locked ]] || WT_STATES[i]=prunable
+                ;;
+        esac
+    done <<< "$list"
+    WT_PATHS=("${WT_PATHS[@]:1}")
+    WT_BRANCHES=("${WT_BRANCHES[@]:1}")
+    WT_STATES=("${WT_STATES[@]:1}")
+}
+
+# The databases the linked worktrees use, comma-separated, for clean to keep.
+# A worktree whose directory is gone still counts until `git worktree prune`
+# drops it: inside a container, git can't see the host's worktree
+# directories and would report every one as gone.
+in_use_databases() {
+    local test_base dev_base i name db names=""
+    test_base="$(main_test_database)"
+    dev_base="$(main_dev_database)"
+    load_worktree_list
+    for ((i = 0; i < ${#WT_PATHS[@]}; i++)); do
+        name="$(basename "${WT_PATHS[i]}")"
+        if db="$(derive_test_database_name "${test_base:-testing}" "$name")"; then
+            names+=",$db"
+        fi
+        if [[ -n "$dev_base" ]] && db="$(derive_dev_database_name "$dev_base" "$name")"; then
+            names+=",$db"
+        fi
+    done
+    echo "${names#,}"
+}
+
+# origin's default branch as a ref, e.g. "origin/main".
+default_branch_ref() {
+    local ref
+    ref="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD)" || ref=origin/main
+    git rev-parse --verify --quiet "$ref^{commit}" > /dev/null || return 1
+    echo "$ref"
+}
+
+# Whether BRANCH's work is in REF: merged or fast-forwarded into it, or
+# squash- or rebase-merged, which leaves a commit in REF with the same
+# change as the whole branch.
+is_merged() {
+    local branch="$1" ref="$2" base tmp
+    if git merge-base --is-ancestor "$branch" "$ref"; then
+        ! is_unused_branch "$branch" "$ref"
+        return
+    fi
+    base="$(git merge-base "$ref" "$branch")" || return 1
+    tmp="$(GIT_AUTHOR_NAME=worktree GIT_AUTHOR_EMAIL=worktree@localhost \
+        GIT_COMMITTER_NAME=worktree GIT_COMMITTER_EMAIL=worktree@localhost \
+        git commit-tree "$branch^{tree}" -p "$base" -m squashed)" || return 1
+    [[ "$(git cherry "$ref" "$tmp")" == -* ]]
+}
+
+# A branch nobody has committed to is also an ancestor of REF, but isn't
+# finished. It still points where it was created (a single reflog entry), at
+# a commit on REF's own line rather than one merged in from a branch. The
+# grep reads all of rev-list's output, so pipefail sees no SIGPIPE.
+is_unused_branch() {
+    (( $(git reflog show "refs/heads/$1" -- 2> /dev/null | wc -l) <= 1 )) &&
+        git rev-list --first-parent "$2" | grep -xF "$(git rev-parse "$1")" > /dev/null
 }
 
 # Creates the per-worktree database named by DB_DATABASE, which bash already
