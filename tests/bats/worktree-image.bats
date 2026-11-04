@@ -38,9 +38,9 @@ ENV
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
 
-    run grep -- "run " "$DOCKER_LOG"
+    output="$(cat "$DOCKER_LOG")"
     [[ "$output" == *"-e APP_ENV=testing"* ]]
-    [[ "$output" == *"-e DB_DATABASE=testing"* ]]
+    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth"* ]]
 }
 
 @test "passthrough and test run as the host user so the worktree's files stay owned by it" {
@@ -126,4 +126,17 @@ SCRIPT
     # pwd -P: git prints the resolved path, e.g. /private/var on macOS.
     [ "$output" = "$(cd "$container/var/www/html" && pwd -P)" ]
     [ -L "$container/var/main/.git" ]
+}
+
+@test "test takes database credentials the testing env file leaves out from .env, and passes no blanks" {
+    sed -i.bak '/^DB_HOST=/d; /^DB_USERNAME=/d' "$WORKTREE_DIR/.env.testing"
+    printf 'DB_HOST=mysql\n' > "$WORKTREE_DIR/.env"
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 0 ]
+
+    output="$(cat "$DOCKER_LOG")"
+    [[ "$output" == *"-e DB_HOST=mysql "* ]]
+    [[ "$output" == *"-e DB_PASSWORD= "* ]]
+    [[ "$output" != *"DB_USERNAME="* ]]
 }

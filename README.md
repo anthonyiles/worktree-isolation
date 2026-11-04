@@ -4,7 +4,7 @@ Make every `git worktree` of a PHP project ready to use the moment it's created,
 
 After a one-off install, `git worktree add` automatically:
 
-- copies `.env` and `.env.testing` from the main checkout
+- copies `.env` (and `.env.testing`, if you have one) from the main checkout
 - gives the worktree its own MySQL/MariaDB test and development databases, so parallel worktrees (and AI agents running migrations in them) never touch each other's data or the main checkout's
 - runs `composer install`, and your JavaScript package manager's install when there's a `package.json`
 
@@ -64,8 +64,8 @@ Tip: `alias worktree='vendor/bin/worktree'`.
 
 ## What setup does
 
-1. Copies `.env` and `.env.testing` (or `.env.testing.example`) from the main checkout, if the worktree doesn't have them.
-2. Points both at the worktree's own databases (see below), before anything else runs.
+1. Copies `.env` and, if the project has one, `.env.testing` (or `.env.testing.example`) from the main checkout, if the worktree doesn't have them.
+2. Points them at the worktree's own databases (see below), before anything else runs.
 3. Docker Compose only: starts the worktree's own stack with `docker compose -p <project>-<worktree> up -d`.
 4. Runs `composer install`.
 5. Creates the test and development databases. A new development database is migrated and seeded; an existing one is only migrated.
@@ -80,13 +80,14 @@ Each worktree's databases are named after its directory:
 
 | | Main checkout | Worktree `feature-auth` |
 |---|---|---|
-| Test (`.env.testing`) | `testing` | `testing_wt_feature-auth` |
+| Test | (yours) | `myapp_test_wt_feature-auth` |
 | Development (`.env`) | `myapp` | `myapp_wt_feature-auth` |
 
-- Only MySQL/MariaDB connections are changed. SQLite and others are left alone.
-- The main checkout's test database name must contain `test`, and a worktree is never pointed at one of the main checkout's databases.
+- Both are named after the main checkout's `.env` `DB_DATABASE`, so no `.env.testing` is needed. The test database uses the connection and credentials your tests use: `phpunit.xml`, then `.env.testing`, then `.env`.
+- Only MySQL/MariaDB connections are changed. SQLite and others are left alone. A worktree is never pointed at one of the main checkout's databases.
 - Long names are shortened with a hash (test names to 40 characters, development names to 64).
-- The names are written into the worktree's env files, so `php artisan test`, `phpunit` and the like use them too. `vendor/bin/worktree test` also creates the test database if it's missing.
+- `vendor/bin/worktree test` passes the test database in the environment, and creates it if it's missing. A worktree's `.env.testing`, if any, gets the name too, so `php artisan test` and `phpunit` use it, unless `phpunit.xml` sets `DB_DATABASE`.
+- `phpunit.xml` must set `DB_DATABASE` (if at all) with `<env>` and no `force="true"`: a forced value or `<server>` overrides the worktree's.
 - `vendor/bin/worktree clean` drops the databases of removed worktrees (after asking; `--force` skips the prompt). `--all` drops every per-worktree database. The main checkout's databases are never dropped.
 
 ## Configuration

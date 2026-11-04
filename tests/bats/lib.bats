@@ -177,3 +177,90 @@ setup() {
     run yaml_string 'a "b" \c $d'
     [ "$output" = '"a \"b\" \\c $$d"' ]
 }
+
+@test "reads phpunit.xml's values, skipping commented-out elements" {
+    dir="$BATS_TEST_TMPDIR/project"
+    mkdir -p "$dir"
+    cat > "$dir/phpunit.xml.dist" <<'XML'
+<phpunit>
+    <php>
+        <!-- <env name="DB_DATABASE" value=":memory:"/> -->
+        <env name="APP_ENV" value="testing"/>
+        <env
+            value='app_testing' name='DB_DATABASE'/>
+        <server name="DB_CONNECTION" value="mysql"/>
+    </php>
+</phpunit>
+XML
+
+    run phpunit_value "$dir" DB_DATABASE
+    [ "$output" = app_testing ]
+    run phpunit_value "$dir" DB_CONNECTION
+    [ "$output" = mysql ]
+    run phpunit_value "$dir" DB_HOST
+    [ "$status" -eq 1 ]
+}
+
+@test "prefers phpunit.xml over phpunit.xml.dist" {
+    dir="$BATS_TEST_TMPDIR/project"
+    mkdir -p "$dir"
+    echo '<env name="DB_DATABASE" value="dist"/>' > "$dir/phpunit.xml.dist"
+    echo '<env name="DB_DATABASE" value="local"/>' > "$dir/phpunit.xml"
+
+    run phpunit_value "$dir" DB_DATABASE
+    [ "$output" = local ]
+}
+
+@test "warns when phpunit.xml forces DB_DATABASE, by force or with <server>" {
+    PROJECT_ROOT="$BATS_TEST_TMPDIR"
+    echo '<env name="DB_DATABASE" value="x"/>' > "$PROJECT_ROOT/phpunit.xml"
+    run warn_if_phpunit_forces_database
+    [ -z "$output" ]
+
+    echo '<env name="DB_DATABASE" value="x" force="true"/>' > "$PROJECT_ROOT/phpunit.xml"
+    run warn_if_phpunit_forces_database
+    [[ "$output" == *"so tests ignore this"* ]]
+
+    echo '<server name="DB_DATABASE" value="x"/>' > "$PROJECT_ROOT/phpunit.xml"
+    run warn_if_phpunit_forces_database
+    [[ "$output" == *"so tests ignore this"* ]]
+}
+
+@test "reads a test setting from phpunit.xml, then the testing env file, then .env" {
+    dir="$BATS_TEST_TMPDIR"
+    TESTING_ENV_FILE=.env.testing
+    printf 'DB_HOST=mysql\nDB_PORT=3306\nDB_PASSWORD=secret\n' > "$dir/.env"
+    printf 'DB_PORT=3307\nDB_PASSWORD=\n' > "$dir/.env.testing"
+    echo '<env name="DB_PORT" value="3308"/>' > "$dir/phpunit.xml"
+
+    run test_db_setting "$dir" DB_HOST
+    [ "$output" = mysql ]
+    run test_db_setting "$dir" DB_PORT
+    [ "$output" = 3308 ]
+    run test_db_setting "$dir" DB_PASSWORD
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    run test_db_setting "$dir" DB_USERNAME
+    [ "$status" -eq 1 ]
+}
+
+@test "names test databases after the main checkout's development database" {
+    repo="$BATS_TEST_TMPDIR/repo"
+    git init -q "$repo"
+    cd "$repo"
+
+    run test_database_base
+    [ "$output" = testing ]
+    printf 'DB_CONNECTION=sqlite\nDB_DATABASE=database/database.sqlite\n' > .env
+    run test_database_base
+    [ "$output" = testing ]
+    printf 'DB_CONNECTION=mysql\nDB_DATABASE=myapp_wt_old\n' > .env
+    run test_database_base
+    [ "$output" = myapp_test ]
+    printf 'DB_CONNECTION=mysql\nDB_DATABASE=my_long_app_name_with_more\n' > .env
+    run test_database_base
+    [ "$output" = my_long_app_name_test ]
+    printf 'DB_CONNECTION=mysql\nDB_DATABASE=my_long_app_nam_e\n' > .env
+    run test_database_base
+    [ "$output" = my_long_app_nam_test ]
+}

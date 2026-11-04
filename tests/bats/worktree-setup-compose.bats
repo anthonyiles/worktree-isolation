@@ -123,8 +123,8 @@ SCRIPT
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
     [[ "$output" == *"its branch predates worktree-isolation"* ]]
-    run grep TEST_DB_PER_WORKTREE "$WORKTREE_DIR/.env.testing"
-    [ "$status" -ne 0 ]
+    run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
+    [ "$output" = DB_DATABASE=testing ]
     [ ! -s "$DOCKER_LOG" ]
 }
 

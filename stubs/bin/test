@@ -61,27 +61,25 @@ RUN_TESTS='
 '
 
 TEST_ENV=(-e "TEST_COMMAND=$TEST_COMMAND")
-MAIN_TEST_DB="$(main_test_database)"
 
-if [[ "${TEST_DB_PER_WORKTREE:-}" == true && "${DB_CONNECTION:-}" =~ ^(mysql|mariadb)$ ]]; then
-    # Derive from the main checkout's name, as setup does.
-    base_db="${MAIN_TEST_DB:-${DB_DATABASE:-}}"
-    if ! DB_DATABASE="$(derive_test_database_name "${base_db:-testing}" "$WORKTREE_BASENAME")"; then
-        echo "Error: could not derive the per-worktree test database from '${base_db:-testing}'." >&2
-        echo "It must contain \"test\" and fit in 40 characters with the worktree name." >&2
+# The test database is passed in the environment, which beats .env,
+# .env.testing and phpunit.xml's <env>, so no file needs to name it.
+if tests_use_mysql; then
+    if ! DB_DATABASE="$(derive_test_database_name "$(test_database_base)" "$WORKTREE_BASENAME")"; then
+        echo "Error: could not derive the per-worktree test database from '$(test_database_base)'." >&2
         exit 1
     fi
+    warn_if_phpunit_forces_database
     TEST_ENV+=(
         -e "ENSURE_DB_PHP=$ENSURE_DB_PHP"
-        -e "MAIN_DB_DATABASE=$MAIN_TEST_DB"
+        -e "MAIN_DB_DATABASE=$(main_test_database)"
+        -e "DB_DATABASE=$DB_DATABASE"
     )
-    for var in DB_DATABASE DB_HOST DB_PORT DB_USERNAME DB_PASSWORD; do
-        TEST_ENV+=(-e "$var=${!var:-}")
+    for var in DB_CONNECTION DB_HOST DB_PORT DB_USERNAME DB_PASSWORD; do
+        if value="$(test_db_setting "$PROJECT_ROOT" "$var")"; then
+            TEST_ENV+=(-e "$var=$value")
+        fi
     done
-elif [[ -n "$MAIN_TEST_DB" && "${DB_DATABASE:-}" == "$MAIN_TEST_DB" ]]; then
-    echo "Error: $TESTING_ENV_FILE points at the main checkout's test database ($MAIN_TEST_DB)." >&2
-    echo "Set TEST_DB_PER_WORKTREE=true in $TESTING_ENV_FILE, or run vendor/bin/worktree setup." >&2
-    exit 1
 fi
 
 # A container doesn't inherit this shell's environment, so pass it every

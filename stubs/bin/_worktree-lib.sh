@@ -148,12 +148,118 @@ main_dev_database() {
     env_file_value "$(main_checkout_dir)/.env" DB_DATABASE
 }
 
+# The main checkout's test database, as its tests see it. Worktrees must
+# never use it.
 main_test_database() {
-    local main_dir name
-    main_dir="$(main_checkout_dir)"
-    name="$(env_file_value "$main_dir/$TESTING_ENV_FILE" DB_DATABASE)"
-    [[ -n "$name" ]] || name="$(env_file_value "$main_dir/$TESTING_ENV_EXAMPLE" DB_DATABASE)"
-    echo "$name"
+    test_db_setting "$(main_checkout_dir)" DB_DATABASE || true
+}
+
+# Worktrees' test databases are named after the main checkout's development
+# database, "{name}_test_wt_{worktree}", so no testing env file is needed.
+# The name is cut to 16 bytes to leave the worktree room within 40. Falls
+# back to "testing" when .env has no MySQL/MariaDB database. Matches
+# testDatabaseBase() in worktree-clean.
+test_database_base() {
+    local LC_ALL=C env name=""
+    env="$(main_checkout_dir)/.env"
+    if is_mysql_connection "$env"; then
+        name="$(env_file_value "$env" DB_DATABASE)"
+        name="${name%%_wt_*}"
+        name="${name:0:16}"
+        while [[ "$name" == *[_-] ]]; do
+            name="${name%?}"
+        done
+    fi
+    if [[ -n "$name" ]]; then
+        echo "${name}_test"
+    else
+        echo testing
+    fi
+}
+
+# Per-worktree test databases apply when the tests use MySQL/MariaDB.
+tests_use_mysql() {
+    [[ "$(test_db_setting "$PROJECT_ROOT" DB_CONNECTION)" =~ ^(mysql|mariadb)$ ]]
+}
+
+# Usage: test_db_setting DIR KEY
+# KEY as DIR's tests see it: phpunit.xml (else phpunit.xml.dist), then the
+# testing env file, then .env, which Laravel loads when there's no testing
+# env file. Fails when none sets it, so callers don't pass a blank that
+# would override .env. Matches testSetting() in worktree-clean.
+test_db_setting() {
+    local file
+    phpunit_value "$1" "$2" && return
+    for file in "$1/$TESTING_ENV_FILE" "$1/.env"; do
+        if [[ $'\n'"$(env_file_keys "$file")"$'\n' == *$'\n'"$2"$'\n'* ]]; then
+            env_file_value "$file" "$2"
+            return
+        fi
+    done
+    return 1
+}
+
+# Warns when phpunit.xml's DB_DATABASE beats the per-worktree one, which
+# vendor/bin/worktree test passes in the environment: an <env> with
+# force="true", or a <server>, which PHPUnit always writes to $_SERVER,
+# where Laravel looks first.
+warn_if_phpunit_forces_database() {
+    local file element
+    file="$(phpunit_file "$PROJECT_ROOT")" || return 0
+    element="$(phpunit_variable "$file" DB_DATABASE)"
+    if [[ "$element" == '<server'* || "$(xml_attribute "$element" force)" =~ ^(true|1)$ ]]; then
+        echo "Warning: phpunit.xml sets DB_DATABASE with <server> or force=\"true\", so tests ignore this" >&2
+        echo "  worktree's test database. Use <env name=\"DB_DATABASE\" ...> without force." >&2
+    fi
+}
+
+phpunit_file() {
+    local file
+    for file in "$1/phpunit.xml" "$1/phpunit.xml.dist"; do
+        if [[ -f "$file" ]]; then
+            echo "$file"
+            return
+        fi
+    done
+    return 1
+}
+
+# Usage: phpunit_value DIR NAME
+# The value phpunit.xml's <env> or <server> element gives NAME; fails when
+# there's none.
+phpunit_value() {
+    local file element
+    file="$(phpunit_file "$1")" || return 1
+    element="$(phpunit_variable "$file" "$2")"
+    [[ -n "$element" ]] || return 1
+    xml_attribute "$element" value
+}
+
+# Prints the first <env> or <server> element setting NAME in a phpunit.xml,
+# on one line, ignoring commented-out ones.
+phpunit_variable() {
+    local content rest element pattern='<(env|server)[[:space:]][^>]*>'
+    content="$(tr '\r\n\t' '   ' < "$1")"
+    while [[ "$content" == *'<!--'* ]]; do
+        rest="${content#*<!--}"
+        content="${content%%<!--*}"
+        [[ "$rest" != *'-->'* ]] || content+="${rest#*-->}"
+    done
+    while [[ "$content" =~ $pattern ]]; do
+        element="${BASH_REMATCH[0]}"
+        if [[ "$(xml_attribute "$element" name)" == "$2" ]]; then
+            echo "$element"
+            return
+        fi
+        content="${content#*"$element"}"
+    done
+}
+
+xml_attribute() {
+    local double="[[:space:]]$2[[:space:]]*=[[:space:]]*\"([^\"]*)\"" single="[[:space:]]$2[[:space:]]*=[[:space:]]*'([^']*)'"
+    if [[ "$1" =~ $double || "$1" =~ $single ]]; then
+        echo "${BASH_REMATCH[1]}"
+    fi
 }
 
 # Used for database names and, by worktree-install, the compose project
@@ -212,7 +318,8 @@ derive_dev_database_name() {
 }
 
 # The "test" check runs on the base: a worktree named e.g. "test-refactor"
-# must not make a non-test base pass.
+# must not make a non-test base pass. Capped at 40 characters: MySQL
+# rejected longer test database names.
 derive_test_database_name() {
     local base="${1%%_wt_*}"
     [[ "$(printf '%s' "$base" | LC_ALL=C tr '[:upper:]' '[:lower:]')" == *test* ]] || return 1
@@ -260,12 +367,12 @@ load_worktree_list() {
 # directories and would report every one as gone.
 in_use_databases() {
     local test_base dev_base i name db names=""
-    test_base="$(main_test_database)"
+    test_base="$(test_database_base)"
     dev_base="$(main_dev_database)"
     load_worktree_list
     for ((i = 0; i < ${#WT_PATHS[@]}; i++)); do
         name="$(basename "${WT_PATHS[i]}")"
-        if db="$(derive_test_database_name "${test_base:-testing}" "$name")"; then
+        if db="$(derive_test_database_name "$test_base" "$name")"; then
             names+=",$db"
         fi
         if [[ -n "$dev_base" ]] && db="$(derive_dev_database_name "$dev_base" "$name")"; then

@@ -55,7 +55,7 @@ else
     echo "Warning: .env not found in main repo either." >&2
 fi
 
-# Testing env file — fall back to example if needed
+# Testing env file, if the project has one — fall back to example if needed
 if [[ ! -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
     if [[ -f "$MAIN_REPO/$TESTING_ENV_FILE" ]]; then
         cp "$MAIN_REPO/$TESTING_ENV_FILE" "$PROJECT_ROOT/$TESTING_ENV_FILE"
@@ -63,23 +63,17 @@ if [[ ! -f "$PROJECT_ROOT/$TESTING_ENV_FILE" ]]; then
     elif [[ -f "$MAIN_REPO/$TESTING_ENV_EXAMPLE" ]]; then
         cp "$MAIN_REPO/$TESTING_ENV_EXAMPLE" "$PROJECT_ROOT/$TESTING_ENV_FILE"
         echo "Copied $TESTING_ENV_FILE from $TESTING_ENV_EXAMPLE."
-    else
-        echo "Warning: $TESTING_ENV_FILE not found in main repo." >&2
     fi
 else
     echo "$TESTING_ENV_FILE already exists, skipping."
 fi
 
-# Per-worktree test databases only apply to MySQL/MariaDB; anything else
-# (e.g. SQLite) keeps its testing env untouched.
+# Per-worktree test databases only apply when the tests use MySQL/MariaDB;
+# anything else (e.g. SQLite) keeps its testing env untouched.
 TESTING_ENV_PATH="$PROJECT_ROOT/$TESTING_ENV_FILE"
 ENV_PATH="$PROJECT_ROOT/.env"
 TEST_DB_PER_WORKTREE=false
-if [[ -f "$TESTING_ENV_PATH" ]] && is_mysql_connection "$TESTING_ENV_PATH"; then
-    TEST_DB_PER_WORKTREE=true
-    set_env_file_value "$TESTING_ENV_PATH" TEST_DB_PER_WORKTREE true
-    echo "Enabled TEST_DB_PER_WORKTREE=true for this worktree."
-fi
+tests_use_mysql && TEST_DB_PER_WORKTREE=true
 
 # Per-worktree development databases are off unless configured; install
 # writes WORKTREE_DEV_DB_PER_WORKTREE=true.
@@ -112,13 +106,16 @@ if [[ "$DEV_DB_PER_WORKTREE" == true ]]; then
     set_env_file_value "$ENV_PATH" DB_DATABASE "$DEV_DB"
 fi
 
+# vendor/bin/worktree test passes the test database in the environment. A
+# testing env file gets it too, so running the tests directly (php artisan
+# test, phpunit) doesn't use the main checkout's.
 if [[ "$TEST_DB_PER_WORKTREE" == true ]]; then
-    base_db="${MAIN_TEST_DB:-$(env_file_value "$TESTING_ENV_PATH" DB_DATABASE)}"
-    TEST_DB="$(derive_test_database_name "${base_db:-testing}" "$WORKTREE_BASENAME")" || TEST_DB=""
+    TEST_DB="$(derive_test_database_name "$(test_database_base)" "$WORKTREE_BASENAME")" || TEST_DB=""
     if [[ "$TEST_DB" == "$MAIN_TEST_DB" || "$TEST_DB" == "$MAIN_DEV_DB" || ( -n "$DEV_DB" && "$TEST_DB" == "$DEV_DB" ) ]]; then
         TEST_DB=""
     fi
-    set_env_file_value "$TESTING_ENV_PATH" DB_DATABASE "$TEST_DB"
+    [[ ! -f "$TESTING_ENV_PATH" ]] || set_env_file_value "$TESTING_ENV_PATH" DB_DATABASE "$TEST_DB"
+    warn_if_phpunit_forces_database
 fi
 
 # ---------------------------------------------------------------------------
@@ -144,19 +141,27 @@ run_in_runtime composer install --no-interaction --no-progress
 # ---------------------------------------------------------------------------
 # 6. Per-worktree databases
 # ---------------------------------------------------------------------------
-# Usage: ensure_worktree_database ENV_FILE NAME MAIN_DB
+# Usage: ensure_worktree_database test|development NAME MAIN_DB
 # Prints "<name> created|existing".
 ensure_worktree_database() {
-    local env_file="$1" name="$2" main_db="$3" output
+    local kind="$1" name="$2" main_db="$3" output
     output="$(run_in_runtime \
         -e "MAIN_DB_DATABASE=$main_db" \
         -e "DB_DATABASE=$name" \
-        -e "DB_HOST=$(env_file_value "$env_file" DB_HOST)" \
-        -e "DB_PORT=$(env_file_value "$env_file" DB_PORT)" \
-        -e "DB_USERNAME=$(env_file_value "$env_file" DB_USERNAME)" \
-        -e "DB_PASSWORD=$(env_file_value "$env_file" DB_PASSWORD)" \
+        -e "DB_HOST=$(db_credential "$kind" DB_HOST)" \
+        -e "DB_PORT=$(db_credential "$kind" DB_PORT)" \
+        -e "DB_USERNAME=$(db_credential "$kind" DB_USERNAME)" \
+        -e "DB_PASSWORD=$(db_credential "$kind" DB_PASSWORD)" \
         php -r "$ENSURE_DB_PHP")" || return
     parse_ensure_db_output "$output"
+}
+
+db_credential() {
+    if [[ "$1" == test ]]; then
+        test_db_setting "$PROJECT_ROOT" "$2"
+    else
+        env_file_value "$ENV_PATH" "$2"
+    fi
 }
 
 # A freshly started Compose database can take a while to accept connections.
@@ -176,23 +181,19 @@ if [[ "$RUNTIME" == "docker-compose" && "$DB_WAIT_SECONDS" -gt 0 ]]; then
     ENSURE_DB=ensure_worktree_database_with_wait
 fi
 
-# Writing DB_DATABASE into $TESTING_ENV_FILE means sail test, artisan test,
-# and phpunit all read the isolated database too, not just vendor/bin/worktree test.
 if [[ "$TEST_DB_PER_WORKTREE" == true ]]; then
     echo ""
     echo "Creating per-worktree test database..."
 
     if [[ -z "$TEST_DB" ]]; then
-        echo "Warning: Could not derive a test database name from the main checkout's DB_DATABASE." >&2
-        echo "  It must contain \"test\" and fit in 40 characters with the worktree name." >&2
-        echo "  DB_DATABASE is left blank in $TESTING_ENV_FILE; fix it and re-run vendor/bin/worktree setup." >&2
+        echo "Warning: Could not derive a test database name from '$(test_database_base)'." >&2
     # A DB failure here (MySQL down, bad creds, missing driver) must not abort
     # setup; vendor/bin/worktree test creates the database on first run.
-    elif $ENSURE_DB "$TESTING_ENV_PATH" "$TEST_DB" "$MAIN_TEST_DB" > /dev/null; then
-        echo "Using DB_DATABASE=$TEST_DB in $TESTING_ENV_FILE"
-    else
-        echo "Warning: Could not create the test database '$TEST_DB' — check DB_* settings in $TESTING_ENV_FILE." >&2
+    elif ! $ENSURE_DB test "$TEST_DB" "$MAIN_TEST_DB" > /dev/null; then
+        echo "Warning: Could not create the test database '$TEST_DB' — check the DB_* settings the tests use." >&2
         echo "  vendor/bin/worktree test will create it on first run." >&2
+    else
+        echo "Using test database $TEST_DB"
     fi
 fi
 
@@ -203,7 +204,7 @@ if [[ "$DEV_DB_PER_WORKTREE" == true ]]; then
     if [[ -z "$DEV_DB" ]]; then
         echo "Warning: Could not derive a development database name from the main checkout's DB_DATABASE." >&2
         echo "  DB_DATABASE is left blank in .env; set it and re-run vendor/bin/worktree setup." >&2
-    elif result="$($ENSURE_DB "$ENV_PATH" "$DEV_DB" "$MAIN_DEV_DB")"; then
+    elif result="$($ENSURE_DB development "$DEV_DB" "$MAIN_DEV_DB")"; then
         echo "Using DB_DATABASE=$DEV_DB in .env"
 
         if [[ -n "$DEV_DB_MIGRATE_COMMAND" ]]; then

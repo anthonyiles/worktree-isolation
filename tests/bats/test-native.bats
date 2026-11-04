@@ -11,7 +11,6 @@ setup() {
 WORKTREE_RUNTIME=native
 WORKTREE_TEST_COMMAND="printenv DB_DATABASE"
 ENV
-    echo "TEST_DB_PER_WORKTREE=true" >> "$WORKTREE_DIR/.env.testing"
 
     cat > "$FAKE_BIN/php" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -49,30 +48,21 @@ SCRIPT
     [[ "$output" != *$'\ntesting_wt_feature-auth'* ]]
 }
 
-@test "refuses the main checkout's test database when per-worktree databases are off" {
-    sed -i.bak '/^TEST_DB_PER_WORKTREE=/d' "$WORKTREE_DIR/.env.testing"
-    cp "$WORKTREE_DIR/.env.testing" "$MAIN_REPO/.env.testing"
-
-    run bash "$STUBS_DIR/test"
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"main checkout's test database (testing)"* ]]
-}
-
-@test "derives from the main checkout's test database name" {
-    echo "DB_DATABASE=app-testing" > "$MAIN_REPO/.env.testing"
-    sed -i.bak 's/^DB_DATABASE=.*/DB_DATABASE=/' "$WORKTREE_DIR/.env.testing"
+@test "names the test database after the main checkout's development database" {
+    printf 'DB_CONNECTION=mysql\nDB_DATABASE=myapp\n' > "$MAIN_REPO/.env"
+    echo "DB_DATABASE=myapp_wt_feature-auth" > "$WORKTREE_DIR/.env"
 
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
-    [ "${lines[${#lines[@]}-1]}" = "app-testing_wt_feature-auth" ]
+    [ "${lines[${#lines[@]}-1]}" = "myapp_test_wt_feature-auth" ]
 }
 
-@test "refuses a test database name without \"test\" in it" {
-    echo "DB_DATABASE=myapp" > "$MAIN_REPO/.env.testing"
+@test "shortens a long development database name to fit the worktree's" {
+    printf 'DB_CONNECTION=mysql\nDB_DATABASE=a_very_long_application_name\n' > "$MAIN_REPO/.env"
 
     run bash "$STUBS_DIR/test"
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"could not derive the per-worktree test database from 'myapp'"* ]]
+    [ "$status" -eq 0 ]
+    [ "${lines[${#lines[@]}-1]}" = "a_very_long_appl_test_wt_feature-auth" ]
 }
 
 @test "keeps quoted arguments in the test command together" {
@@ -81,4 +71,32 @@ SCRIPT
     run bash "$STUBS_DIR/test" "c d"
     [ "$status" -eq 0 ]
     [ "${lines[${#lines[@]}-1]}" = "[a b][c d]" ]
+}
+
+@test "needs no testing env file" {
+    rm "$WORKTREE_DIR/.env.testing"
+    echo "DB_CONNECTION=mysql" > "$WORKTREE_DIR/.env"
+    printf 'DB_CONNECTION=mysql\nDB_DATABASE=myapp\n' > "$MAIN_REPO/.env"
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 0 ]
+    [ "${lines[${#lines[@]}-1]}" = "myapp_test_wt_feature-auth" ]
+    [ ! -e "$WORKTREE_DIR/.env.testing" ]
+}
+
+@test "warns when phpunit.xml forces DB_DATABASE" {
+    echo '<phpunit><php><env name="DB_DATABASE" value="app_testing" force="true"/></php></phpunit>' > "$WORKTREE_DIR/phpunit.xml"
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Warning: phpunit.xml sets DB_DATABASE with <server> or force=\"true\""* ]]
+}
+
+@test "leaves a database alone when phpunit.xml makes the tests use SQLite" {
+    echo '<phpunit><php><env name="DB_CONNECTION" value="sqlite"/></php></phpunit>' > "$WORKTREE_DIR/phpunit.xml"
+    echo "WORKTREE_TEST_COMMAND='echo ran'" >> "$WORKTREE_DIR/.worktree-isolation.env"
+
+    run bash "$STUBS_DIR/test"
+    [ "$status" -eq 0 ]
+    [ "$output" = ran ]
 }

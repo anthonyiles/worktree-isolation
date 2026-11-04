@@ -82,9 +82,31 @@ run_clean() {
     worktree="$BATS_TEST_TMPDIR/worktrees/feature"
     git -C "$PROJECT_DIR" worktree add -q -b feature "$worktree"
     cp "$PROJECT_DIR/.worktree-isolation.env" "$worktree/"
-    printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=testing_wt_feature\n' > "$worktree/.env.testing"
+    printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=2\nDB_DATABASE=testing_wt_feature\n' > "$worktree/.env.testing"
 
     run php "$STUBS_DIR/worktree-clean" --project-dir="$worktree" --keep= --force
+    [[ "$output" == *"Could not connect to the test database server at 127.0.0.1:1"* ]]
     [[ "$output" == *"development database server"* ]]
+    [[ "$output" != *":2"* ]]
+}
+
+@test "cleans test databases without a testing env file" {
+    run run_clean
+    [[ "$output" == *"Could not connect to the test database server at 127.0.0.1:1"* ]]
+    [[ "$output" == *"DB_PASSWORD in phpunit.xml, .env.testing or .env"* ]]
+}
+
+@test "skips the test databases when phpunit.xml makes the tests use SQLite" {
+    echo '<phpunit><php><env name="DB_CONNECTION" value="sqlite"/></php></phpunit>' > "$PROJECT_DIR/phpunit.xml"
+
+    run run_clean
     [[ "$output" != *"test database server"* ]]
+    [[ "$output" == *"development database server"* ]]
+}
+
+@test "takes test database credentials the testing env file leaves out from .env" {
+    printf 'DB_CONNECTION=mysql\nDB_DATABASE=testing\n' > "$PROJECT_DIR/.env.testing"
+
+    run run_clean
+    [[ "$output" == *"Could not connect to the test database server at 127.0.0.1:1"* ]]
 }
