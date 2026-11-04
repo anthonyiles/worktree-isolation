@@ -6,7 +6,6 @@
 ### Features
 
 * add worktree prune to remove merged worktrees ([34bc4f4](https://github.com/anthonyiles/worktree-isolation/commit/34bc4f45a36d59c928cb59301d36f54fc38b6438))
-* add worktree prune to remove merged worktrees ([#34](https://github.com/anthonyiles/worktree-isolation/issues/34)) ([df5df40](https://github.com/anthonyiles/worktree-isolation/commit/df5df40441199403a853093b05e5332929ffa672))
 * make the branch prune checks against configurable ([4684780](https://github.com/anthonyiles/worktree-isolation/commit/468478089e17240cf8110eb3620dbe8965af2498))
 * run a project's own command at the end of setup ([6b46b53](https://github.com/anthonyiles/worktree-isolation/commit/6b46b539e68bc88d50a5c365090f51aec1a7d192))
 * warn about project git hooks that call sail ([038c1b9](https://github.com/anthonyiles/worktree-isolation/commit/038c1b9c9ba5a3523b795df248cec34dd4cee531))
@@ -14,7 +13,6 @@
 
 ### Bug Fixes
 
-* git in containers, test databases without .env.testing, post-setup command and hook warnings ([#33](https://github.com/anthonyiles/worktree-isolation/issues/33)) ([22d7689](https://github.com/anthonyiles/worktree-isolation/commit/22d7689031a6b68d48f1d775357e337ff50612a0))
 * make git work inside the Docker runtimes ([097ff02](https://github.com/anthonyiles/worktree-isolation/commit/097ff02cb80c7655387411ea39b0851e39bd3dc6))
 * name per-worktree test databases without needing .env.testing ([69087d1](https://github.com/anthonyiles/worktree-isolation/commit/69087d18dbf864a115a73e7e4600358d6b057ac0))
 
