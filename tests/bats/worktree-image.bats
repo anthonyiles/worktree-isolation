@@ -67,3 +67,63 @@ ENV
     run grep -- "-e DB_PASSWORD=s3cret" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
+
+@test "mounts the main clone's git dir read-write where the worktree's .git file points" {
+    common="$(git -C "$MAIN_REPO" rev-parse --path-format=absolute --git-common-dir)"
+
+    run bash "$STUBS_DIR/worktree" git status
+    [ "$status" -eq 0 ]
+
+    run grep -- "run " "$DOCKER_LOG"
+    [[ "$output" == *"-v $(pwd -P):/var/www/html -v $common:$common -w /var/www/html "* ]]
+    [[ "$output" == *"-e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=*"* ]]
+    [[ "$output" == *"-e GIT_CONFIG_KEY_1=gc.worktreePruneExpire -e GIT_CONFIG_VALUE_1=never"* ]]
+}
+
+# Runs `docker run` on the host instead: the worktree's mount is copied to its
+# target and any other mount is symlinked, so a .git pointer resolves only
+# through the mounts.
+fake_docker_run() {
+    cat > "$FAKE_BIN/docker" <<'SCRIPT'
+#!/usr/bin/env bash
+[[ "$1" == run ]] || exit 0
+shift
+mounts=() workdir= entrypoint=
+while [[ "$1" == -* ]]; do
+    case "$1" in
+        -v) mounts+=("$2"); shift 2 ;;
+        -w) workdir="$2"; shift 2 ;;
+        --entrypoint) entrypoint="$2"; shift 2 ;;
+        -e) export "$2"; shift 2 ;;
+        -u|--network) shift 2 ;;
+        *) shift ;;
+    esac
+done
+shift # image
+for mount in "${mounts[@]}"; do
+    mkdir -p "$(dirname "${mount#*:}")"
+    if [[ "${mount#*:}" == "$workdir" ]]; then
+        cp -R "${mount%%:*}" "$workdir"
+    else
+        ln -s "${mount%%:*}" "${mount#*:}"
+    fi
+done
+cd "$workdir" && exec "$entrypoint" "$@"
+SCRIPT
+}
+
+@test "git works in a worktree added with --relative-paths" {
+    relative_dir="$BATS_TEST_TMPDIR/worktrees/relative"
+    git -C "$MAIN_REPO" worktree add -q --relative-paths -b relative "$relative_dir"
+    cp "$WORKTREE_DIR/.worktree-isolation.env" "$relative_dir/"
+    container="$BATS_TEST_TMPDIR/container"
+    echo "WORKTREE_DOCKER_WORKDIR=$container/var/www/html" >> "$relative_dir/.worktree-isolation.env"
+    fake_docker_run
+    cd "$relative_dir"
+
+    run bash "$STUBS_DIR/worktree" git rev-parse --show-toplevel
+    [ "$status" -eq 0 ]
+    # pwd -P: git prints the resolved path, e.g. /private/var on macOS.
+    [ "$output" = "$(cd "$container/var/www/html" && pwd -P)" ]
+    [ -L "$container/var/main/.git" ]
+}

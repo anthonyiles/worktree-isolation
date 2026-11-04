@@ -28,7 +28,8 @@ Inside a worktree, prefix every project command with `vendor/bin/worktree`:
 | `php artisan migrate`, `sail artisan tinker` | `vendor/bin/worktree php artisan migrate`, `vendor/bin/worktree php artisan tinker` |
 | `docker compose exec app ...` | `vendor/bin/worktree ...` |
 
-Git commands, file edits and read-only tools (`grep`, `ls`) need no prefix.
+Git commands, file edits and read-only tools (`grep`, `ls`) need no prefix. Tools that use
+git, like `vendor/bin/worktree php vendor/bin/pint --dirty`, work through the prefix too.
 
 ## Why
 

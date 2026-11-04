@@ -125,7 +125,7 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 
 Commands are run as you'd type them in a shell, so quoting works.
 
-**Docker notes.** Containers run as your host user, so files they create in the worktree stay yours. With Docker Compose, each worktree runs its own stack, so fixed host ports (e.g. `8080:80`) clash between worktrees: make them configurable (e.g. `${APP_PORT:-8080}:80`) if you run several at once. With the `docker-image` runtime, build the image first (`sail build` or `docker compose build`).
+**Docker notes.** Containers run as your host user, so files they create in the worktree stay yours. The main clone's `.git` directory is mounted too, so git and tools that use it (e.g. `pint --dirty`) work. With Docker Compose, each worktree runs its own stack, so fixed host ports (e.g. `8080:80`) clash between worktrees: make them configurable (e.g. `${APP_PORT:-8080}:80`) if you run several at once. With the `docker-image` runtime, build the image first (`sail build` or `docker compose build`).
 
 ## AI agents
 

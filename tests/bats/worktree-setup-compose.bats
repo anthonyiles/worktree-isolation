@@ -58,7 +58,7 @@ setup() {
     [ "$status" -eq 0 ]
 
     # up -d, composer install, DB derivation, npm install
-    run grep -cF -- "[-f] [my compose.yml]" "$DOCKER_ARGV_LOG"
+    run grep -cF -- "[-f] [$(pwd -P)/my compose.yml]" "$DOCKER_ARGV_LOG"
     [ "$output" -eq 4 ]
 }
 
@@ -157,4 +157,29 @@ SCRIPT
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
     [[ "$output" != *"Could not find origin/"* ]]
+}
+
+@test "mounts the main clone's git dir into the worktree's stack through an override file" {
+    touch "$WORKTREE_DIR/compose.yaml" "$WORKTREE_DIR/compose.override.yaml"
+    root="$(pwd -P)"
+    common="$(git rev-parse --path-format=absolute --git-common-dir)"
+    override="$(git rev-parse --path-format=absolute --git-dir)/worktree-isolation.compose.yml"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+
+    run grep -- "up -d" "$DOCKER_LOG"
+    [[ "$output" == *"-f $root/compose.yaml -f $root/compose.override.yaml -f $override up -d"* ]]
+    run grep -c -- "-f $override" "$DOCKER_LOG"
+    [ "$output" -eq 3 ]
+    [ "$(cat "$override")" = "$(printf 'services:\n  "app":\n    volumes:\n      - type: bind\n        source: "%s"\n        target: "%s"' "$common" "$common")" ]
+}
+
+@test "passes git settings to commands in the stack" {
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+
+    run grep -- " exec " "$DOCKER_LOG"
+    [[ "$output" == *"-e GIT_CONFIG_COUNT=2 "* ]]
+    [[ "$output" == *"-e GIT_CONFIG_VALUE_0=*"* ]]
 }

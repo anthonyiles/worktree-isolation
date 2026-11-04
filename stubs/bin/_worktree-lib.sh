@@ -67,11 +67,11 @@ validate_runtime() {
             if ! in_main_checkout; then
                 COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$(compose_project_base)" "$WORKTREE_BASENAME")"
                 COMPOSE_ARGS+=(-p "$COMPOSE_PROJECT_NAME")
-            fi
-            if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
+                add_compose_git_override
+            elif [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
                 COMPOSE_ARGS+=(-f "$WORKTREE_COMPOSE_FILE")
             fi
-            COMPOSE_EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec "${CONTAINER_USER_ARGS[@]}")
+            COMPOSE_EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec "${CONTAINER_USER_ARGS[@]}" "${CONTAINER_GIT_ENV[@]}")
             # Sail's compose file builds and serves as these, as vendor/bin/sail sets them.
             export WWWUSER="${WWWUSER:-$(id -u)}" WWWGROUP="${WWWGROUP:-$(id -g)}"
             ;;
@@ -91,6 +91,51 @@ validate_runtime() {
             exit 1
             ;;
     esac
+}
+
+# A worktree's stack also mounts the main clone's git dir (see
+# container_git_dir), through an override file kept in the worktree's own git
+# dir, out of the working tree. Passing -f stops Compose finding its default
+# files, so those are passed too. With a relative gitdir pointer, whose
+# target depends on the service's own mounts, nothing is added.
+add_compose_git_override() {
+    local files=() file git_dir override value
+    if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
+        files=("$WORKTREE_COMPOSE_FILE")
+    else
+        value="${COMPOSE_FILE:-$(env_file_value "$PROJECT_ROOT/.env" COMPOSE_FILE)}"
+        if [[ -n "$value" ]]; then
+            IFS="${COMPOSE_PATH_SEPARATOR:-:}" read -ra files <<< "$value"
+        else
+            for file in compose.yaml compose.yml docker-compose.yml docker-compose.yaml; do
+                [[ -f "$PROJECT_ROOT/$file" ]] && files=("$file") && break
+            done
+            for file in compose.override.yml compose.override.yaml docker-compose.override.yml docker-compose.override.yaml; do
+                [[ ${#files[@]} -gt 0 && -f "$PROJECT_ROOT/$file" ]] && files+=("$file") && break
+            done
+        fi
+    fi
+
+    for file in ${files[@]+"${files[@]}"}; do
+        [[ "$file" == /* ]] || file="$PROJECT_ROOT/$file"
+        COMPOSE_ARGS+=(-f "$file")
+    done
+    git_dir="$(container_git_dir)"
+    [[ ${#files[@]} -gt 0 && -n "$git_dir" ]] || return 0
+
+    override="$(git rev-parse --path-format=absolute --git-dir)/worktree-isolation.compose.yml"
+    printf 'services:\n  %s:\n    volumes:\n      - type: bind\n        source: %s\n        target: %s\n' \
+        "$(yaml_string "$COMPOSE_SERVICE")" \
+        "$(yaml_string "$(git rev-parse --path-format=absolute --git-common-dir)")" \
+        "$(yaml_string "$git_dir")" > "$override"
+    COMPOSE_ARGS+=(-f "$override")
+}
+
+# Double-quotes a YAML string, escaping $ from Compose's interpolation too.
+yaml_string() {
+    local value="${1//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '"%s"' "${value//\$/\$\$}"
 }
 
 main_checkout_dir() {
@@ -306,13 +351,67 @@ parse_ensure_db_output() {
     echo "$last"
 }
 
+# Git settings for containers. Files can show up under another owner there
+# (rootless Docker, Docker Desktop), which git refuses as "dubious
+# ownership". The other worktrees aren't mounted, so git gc must not prune
+# them as stale.
+CONTAINER_GIT_ENV=(
+    -e GIT_CONFIG_COUNT=2
+    -e GIT_CONFIG_KEY_0=safe.directory -e "GIT_CONFIG_VALUE_0=*"
+    -e GIT_CONFIG_KEY_1=gc.worktreePruneExpire -e GIT_CONFIG_VALUE_1=never
+)
+
+# Usage: container_git_dir [WORKDIR]
+# A worktree's .git file points at <main>/.git/worktrees/<name>, so a
+# container needs the main clone's git dir mounted where that pointer
+# resolves. Prints that path: the pointer itself when it's absolute, or
+# resolved against WORKDIR, where the worktree is mounted, when it's relative
+# (git worktree add --relative-paths). Prints nothing in the main checkout,
+# or for a relative pointer without WORKDIR.
+container_git_dir() {
+    local workdir="${1:-}" pointer common suffix
+    in_main_checkout && return 0
+    pointer="$(sed -n 's/^gitdir: //p' "$PROJECT_ROOT/.git")"
+    common="$(git rev-parse --path-format=absolute --git-common-dir)"
+    suffix="$(git rev-parse --path-format=absolute --git-dir)"
+    suffix="${suffix#"$common"}"
+    if [[ "$pointer" != /* ]]; then
+        [[ -n "$workdir" ]] || return 0
+        pointer="$(normalize_path "$workdir/$pointer")"
+    fi
+    [[ "$suffix" == /* && "$pointer" == *?"$suffix" ]] || return 0
+    echo "${pointer%"$suffix"}"
+}
+
+# Resolves . and .. in an absolute path without touching the filesystem.
+normalize_path() {
+    local part parts=() out=()
+    IFS=/ read -ra parts <<< "$1"
+    for part in ${parts[@]+"${parts[@]}"}; do
+        case "$part" in
+            ''|.) ;;
+            ..) [[ ${#out[@]} -eq 0 ]] || unset 'out[${#out[@]}-1]' ;;
+            *) out+=("$part") ;;
+        esac
+    done
+    local IFS=/
+    echo "/${out[*]+"${out[*]}"}"
+}
+
 build_docker_image_args() {
+    local git_dir
     DOCKER_ARGS=(
         docker run --rm
         "${CONTAINER_USER_ARGS[@]}"
+        "${CONTAINER_GIT_ENV[@]}"
         -v "$PROJECT_ROOT:$WORKDIR"
-        -w "$WORKDIR"
     )
+    # Read-write: git add, stash and the like write to the index.
+    git_dir="$(container_git_dir "$WORKDIR")"
+    if [[ -n "$git_dir" ]]; then
+        DOCKER_ARGS+=(-v "$(git rev-parse --path-format=absolute --git-common-dir):$git_dir")
+    fi
+    DOCKER_ARGS+=(-w "$WORKDIR")
 
     if [[ -n "$NETWORK" ]]; then
         DOCKER_ARGS+=(--network "$NETWORK")

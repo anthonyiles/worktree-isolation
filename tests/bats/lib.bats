@@ -152,3 +152,28 @@ setup() {
     [ "$(LC_ALL=en_US.UTF-8 derive_dev_database_name myapp "日本")" = "myapp_wt_worktree" ]
     [ "$(LC_ALL=en_US.UTF-8 derive_test_database_name testing "$(printf 'ë%.0s' {1..20})x")" = "testing_wt_x" ]
 }
+
+@test "normalizes . and .. in a path" {
+    run normalize_path "/var/www/html/../../main/./.git"
+    [ "$output" = "/var/main/.git" ]
+    run normalize_path "/../a"
+    [ "$output" = "/a" ]
+    run normalize_path "/"
+    [ "$output" = "/" ]
+}
+
+@test "finds no git dir to mount in the main checkout" {
+    repo="$BATS_TEST_TMPDIR/repo"
+    git init -q "$repo"
+    cd "$repo"
+    PROJECT_ROOT="$repo"
+
+    run container_git_dir /var/www/html
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "quotes a YAML string, escaping Compose interpolation" {
+    run yaml_string 'a "b" \c $d'
+    [ "$output" = '"a \"b\" \\c $$d"' ]
+}
