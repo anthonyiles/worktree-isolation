@@ -7,6 +7,7 @@ namespace WorktreeIsolation;
 use Illuminate\Support\ServiceProvider;
 use WorktreeIsolation\Console\CleanDatabasesCommand;
 use WorktreeIsolation\Console\InstallCommand;
+use WorktreeIsolation\Console\PruneWorktreesCommand;
 
 class WorktreeIsolationServiceProvider extends ServiceProvider
 {
@@ -16,6 +17,7 @@ class WorktreeIsolationServiceProvider extends ServiceProvider
             $this->commands([
                 InstallCommand::class,
                 CleanDatabasesCommand::class,
+                PruneWorktreesCommand::class,
             ]);
         }
     }

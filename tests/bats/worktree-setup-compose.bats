@@ -146,3 +146,15 @@ SCRIPT
     [ "$status" -eq 0 ]
     [[ "$output" == *"Nothing to set up"* ]]
 }
+
+@test "checks for merged worktrees at the end, without failing setup" {
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    # The fixture has no origin, so the check can only report that.
+    [[ "$output" == *"Could not find origin/master"*"Worktree setup complete"* ]]
+
+    echo "WORKTREE_PRUNE_ON_SETUP=false" >> "$WORKTREE_DIR/.worktree-isolation.env"
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Could not find origin/"* ]]
+}

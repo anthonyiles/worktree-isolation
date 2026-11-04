@@ -14,5 +14,6 @@ class WorktreeIsolationServiceProviderTest extends TestCase
     {
         $this->assertArrayHasKey('worktree:install', Artisan::all());
         $this->assertArrayHasKey('worktree:clean', Artisan::all());
+        $this->assertArrayHasKey('worktree:prune', Artisan::all());
     }
 }

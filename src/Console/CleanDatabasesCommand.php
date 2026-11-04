@@ -12,7 +12,7 @@ class CleanDatabasesCommand extends Command
 
     protected $signature = 'worktree:clean
         {--force : Drop databases without confirmation}
-        {--stale : Only drop databases whose worktree no longer exists}';
+        {--all : Drop every per-worktree database, in use or not}';
 
     protected $description = 'Drop per-worktree test and development databases';
 
@@ -20,7 +20,7 @@ class CleanDatabasesCommand extends Command
     {
         $args = ['clean'];
 
-        foreach (['force', 'stale'] as $flag) {
+        foreach (['force', 'all'] as $flag) {
             if ($this->option($flag)) {
                 $args[] = "--$flag";
             }

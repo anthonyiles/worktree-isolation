@@ -58,9 +58,17 @@ class ConsoleCommandsTest extends TestCase
     #[Test]
     public function clean_runs_through_the_dispatcher_with_its_flags(): void
     {
-        $this->artisan('worktree:clean', ['--force' => true, '--stale' => true])->assertSuccessful();
+        $this->artisan('worktree:clean', ['--force' => true, '--all' => true])->assertSuccessful();
 
-        $this->assertRanStub('worktree', ['clean', '--force', '--stale']);
+        $this->assertRanStub('worktree', ['clean', '--force', '--all']);
+    }
+
+    #[Test]
+    public function prune_runs_through_the_dispatcher_with_its_flags(): void
+    {
+        $this->artisan('worktree:prune', ['--dry-run' => true, '--no-fetch' => true])->assertSuccessful();
+
+        $this->assertRanStub('worktree', ['prune', '--dry-run', '--no-fetch']);
     }
 
     #[Test]
@@ -69,6 +77,7 @@ class ConsoleCommandsTest extends TestCase
         Process::fake(['*' => Process::result(exitCode: 1)]);
 
         $this->artisan('worktree:clean')->assertFailed();
+        $this->artisan('worktree:prune')->assertFailed();
         $this->artisan('worktree:install')->assertFailed();
     }
 
