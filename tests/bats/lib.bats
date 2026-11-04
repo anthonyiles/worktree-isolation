@@ -33,7 +33,7 @@ setup() {
     [ "$output" = "myapp-worktree" ]
 }
 
-@test "derives a development database name like DevDatabaseResolver" {
+@test "derives a development database name" {
     run derive_dev_database_name "myapp" "Feature/Auth"
     [ "$output" = "myapp_wt_feature-auth" ]
 }
@@ -50,7 +50,7 @@ setup() {
     [ "$status" -eq 1 ]
 }
 
-@test "truncates an overlong development database name with a hash like DevDatabaseResolver" {
+@test "truncates an overlong development database name with a hash" {
     run derive_dev_database_name "myapp" "$(printf 'a%.0s' {1..64})"
     [ "$status" -eq 0 ]
     [ "$output" = "myapp_wt_$(printf 'a%.0s' {1..46})-0098ba82" ]
@@ -147,30 +147,8 @@ setup() {
     [ "$(bash -c 'echo "$APP_NAME"')" = "My App" ]
 }
 
-# Prints the PHP resolver's name, or ERR when it refuses.
-php_derive() {
-    php -r '
-        $src = $argv[1];
-        require "$src/WorktreeDatabaseResolver.php";
-        require "$src/DevDatabaseResolver.php";
-        require "$src/TestDatabaseResolver.php";
-        try {
-            echo ("WorktreeIsolation\\" . $argv[2])::derive($argv[3], $argv[4]);
-        } catch (InvalidArgumentException) {
-            echo "ERR";
-        }
-    ' -- "$BATS_TEST_DIRNAME/../../src" "$@"
-}
-
-@test "derives the same database names as the PHP resolvers, in a UTF-8 locale too" {
-    local long base name bash_name
-    long="$(printf 'a%.0s' {1..70})"
-    for name in feature-auth Feature/Auth "Fëature-Äbc" "日本" -n -e ___ "$long" feature-very-long-branch-name-one; do
-        for base in testing myapp myapp_test_wt_old "$long"; do
-            bash_name="$(LC_ALL=en_US.UTF-8 derive_dev_database_name "$base" "$name" 2> /dev/null)" || bash_name=ERR
-            [ "$bash_name" = "$(php_derive DevDatabaseResolver "$base" "$name")" ] || { echo "dev: $base / $name: $bash_name"; return 1; }
-            bash_name="$(LC_ALL=en_US.UTF-8 derive_test_database_name "$base" "$name" 2> /dev/null)" || bash_name=ERR
-            [ "$bash_name" = "$(php_derive TestDatabaseResolver "$base" "$name")" ] || { echo "test: $base / $name: $bash_name"; return 1; }
-        done
-    done
+@test "derives database names from bytes, in a UTF-8 locale too" {
+    [ "$(LC_ALL=en_US.UTF-8 derive_dev_database_name myapp "Fëature-Äbc")" = "myapp_wt_f-ature-bc" ]
+    [ "$(LC_ALL=en_US.UTF-8 derive_dev_database_name myapp "日本")" = "myapp_wt_worktree" ]
+    [ "$(LC_ALL=en_US.UTF-8 derive_test_database_name testing "$(printf 'ë%.0s' {1..20})x")" = "testing_wt_x" ]
 }

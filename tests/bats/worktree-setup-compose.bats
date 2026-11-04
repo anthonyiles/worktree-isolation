@@ -151,10 +151,10 @@ SCRIPT
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
     # The fixture has no origin, so the check can only report that.
-    [[ "$output" == *"Could not find origin's default branch"*"Worktree setup complete"* ]]
+    [[ "$output" == *"Could not find origin/master"*"Worktree setup complete"* ]]
 
     echo "WORKTREE_PRUNE_ON_SETUP=false" >> "$WORKTREE_DIR/.worktree-isolation.env"
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
-    [[ "$output" != *"origin's default branch"* ]]
+    [[ "$output" != *"Could not find origin/"* ]]
 }

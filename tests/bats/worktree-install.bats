@@ -60,8 +60,10 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction
 # WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction
 
-# Merged worktrees: report | ask | remove; setup checks after each new worktree
+# Merged worktrees: report | ask | remove. Merged into origin's default branch
+# unless WORKTREE_PRUNE_BRANCH is set; setup checks after each new worktree.
 # WORKTREE_PRUNE=ask
+# WORKTREE_PRUNE_BRANCH=develop
 # WORKTREE_PRUNE_ON_SETUP=true
 ENV
 }

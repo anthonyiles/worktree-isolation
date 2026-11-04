@@ -111,11 +111,10 @@ main_test_database() {
     echo "$name"
 }
 
-# Same sanitization as WorktreeDatabaseResolver::worktreeSuffix(), and what
-# worktree-install applies to the compose project base: lowercase, collapse
-# anything outside [a-z0-9] into a single hyphen, trim leading/trailing
-# hyphens. LC_ALL=C works on bytes like PHP: in a UTF-8 locale, tr and sed
-# would keep letters like "ë".
+# Used for database names and, by worktree-install, the compose project
+# base: lowercase, collapse anything outside [a-z0-9] into a single hyphen,
+# trim leading/trailing hyphens. LC_ALL=C works on bytes: in a UTF-8 locale,
+# tr and sed would keep letters like "ë".
 slugify() {
     local slug
     slug="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
@@ -144,10 +143,9 @@ sha1_hex() {
     fi
 }
 
-# Must match WorktreeDatabaseResolver::derive(). Setup and test derive names
-# here, before the stack starts, and PHP only creates them. An overlong suffix is truncated and tagged with a hash of the
-# full suffix, as in WorktreeDatabaseResolver::fit(). Lengths count bytes,
-# like PHP's strlen().
+# Setup and test derive names here, before the stack starts, and PHP only
+# creates them. An overlong suffix is truncated and tagged with a hash of the
+# full suffix. Lengths count bytes.
 derive_worktree_database_name() {
     local LC_ALL=C
     local base="${1%%_wt_*}" suffix hash room
@@ -232,12 +230,19 @@ in_use_databases() {
     echo "${names#,}"
 }
 
-# origin's default branch as a ref, e.g. "origin/main".
-default_branch_ref() {
+# The ref worktree branches are merged into: origin/$WORKTREE_PRUNE_BRANCH,
+# else origin's default branch, else origin/main or origin/master.
+prune_base_ref() {
     local ref
-    ref="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD)" || ref=origin/main
-    git rev-parse --verify --quiet "$ref^{commit}" > /dev/null || return 1
-    echo "$ref"
+    if [[ -n "${WORKTREE_PRUNE_BRANCH:-}" ]]; then
+        echo "origin/$WORKTREE_PRUNE_BRANCH"
+    elif ref="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD)"; then
+        echo "$ref"
+    elif git rev-parse --verify --quiet refs/remotes/origin/main > /dev/null; then
+        echo origin/main
+    else
+        echo origin/master
+    fi
 }
 
 # Whether BRANCH's work is in REF: merged or fast-forwarded into it, or

@@ -203,9 +203,45 @@ SCRIPT
     grep -q -- "worktree-clean --force --keep=" "$BATS_TEST_TMPDIR/docker.log"
 }
 
-@test "fails without origin's default branch" {
-    git remote remove origin
+@test "checks against WORKTREE_PRUNE_BRANCH when set" {
+    git push -q origin main:develop
+    add_worktree into-develop
+    add_worktree into-main
+    merge_and_push into-main
+    git checkout -q -b develop origin/develop
+    git merge -q --no-ff -m "merge into-develop" into-develop
+    git push -q origin develop
+    echo "WORKTREE_PRUNE_BRANCH=develop" >> .worktree-isolation.env
 
+    run prune --force
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"into-develop is merged into origin/develop"* ]]
+    [ ! -d "$WORKTREES/into-develop" ]
+    [ -d "$WORKTREES/into-main" ]
+}
+
+@test "falls back to origin/master without origin/HEAD" {
+    git push -q origin main:master
+    git remote set-head origin --delete
+    git update-ref -d refs/remotes/origin/main
+    add_worktree merged
+    git merge -q --no-ff -m "merge merged" merged
+    git push -q origin main:master
+
+    run prune --force
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"merged is merged into origin/master"* ]]
+}
+
+@test "fails when the branch to check against doesn't exist" {
+    echo "WORKTREE_PRUNE_BRANCH=nope" >> .worktree-isolation.env
+
+    run prune
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Could not find origin/nope. Set WORKTREE_PRUNE_BRANCH"* ]]
+
+    git remote remove origin
+    sed -i.bak '/WORKTREE_PRUNE_BRANCH/d' .worktree-isolation.env
     run prune
     [ "$status" -eq 1 ]
     [[ "$output" == *"git remote set-head origin --auto"* ]]

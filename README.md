@@ -72,7 +72,7 @@ Tip: `alias worktree='vendor/bin/worktree'`.
 6. If there's a `package.json`, runs `npm install` (or `pnpm`, `yarn` or `bun`, by lockfile). A failure here only warns.
 7. Runs `vendor/bin/worktree prune` without fetching.
 
-`prune` finds worktrees whose branch is merged into origin's default branch (squash merges included), and removes them with their Compose stacks and databases. Branches are kept, and so are worktrees with uncommitted changes.
+`prune` finds worktrees whose branch is merged into origin's default branch, or `WORKTREE_PRUNE_BRANCH` (squash merges included), and removes them with their Compose stacks and databases. Branches are kept, and so are worktrees with uncommitted changes.
 
 ## Databases
 
@@ -119,6 +119,7 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
 
 # WORKTREE_PRUNE=ask             # report | ask | remove merged worktrees
+# WORKTREE_PRUNE_BRANCH=develop  # merged into; defaults to origin's default branch
 # WORKTREE_PRUNE_ON_SETUP=true   # false: setup doesn't run prune
 ```
 

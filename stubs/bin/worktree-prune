@@ -22,11 +22,11 @@ usage() {
     cat <<'HELP'
 Usage: vendor/bin/worktree prune [OPTIONS]
 
-Removes worktrees whose branch is merged into origin's default branch, and
-worktrees whose directory is gone, along with their Compose stacks and
-databases. Local branches are kept. The current worktree, and worktrees that
-are locked, detached or have uncommitted or untracked changes, are never
-removed.
+Removes worktrees whose branch is merged into origin's default branch (or
+origin/$WORKTREE_PRUNE_BRANCH), and worktrees whose directory is gone, along
+with their Compose stacks and databases. Local branches are kept. The current
+worktree, and worktrees that are locked, detached or have uncommitted or
+untracked changes, are never removed.
 
 WORKTREE_PRUNE in .worktree-isolation.env sets what happens: report (only
 list them), ask (list them and confirm; the default) or remove.
@@ -73,8 +73,9 @@ esac
 if [[ "$FETCH" == true ]]; then
     git fetch --prune --quiet origin || echo "Warning: git fetch failed; using the local origin refs." >&2
 fi
-if ! BASE_REF="$(default_branch_ref)"; then
-    echo "Error: Could not find origin's default branch. Set it with: git remote set-head origin --auto" >&2
+BASE_REF="$(prune_base_ref)"
+if ! git rev-parse --verify --quiet "$BASE_REF^{commit}" > /dev/null; then
+    echo "Error: Could not find $BASE_REF. Set WORKTREE_PRUNE_BRANCH in .worktree-isolation.env, or origin's default branch with: git remote set-head origin --auto" >&2
     exit 1
 fi
 
