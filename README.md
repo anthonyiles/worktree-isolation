@@ -60,7 +60,7 @@ vendor/bin/worktree clean                     # drop databases of removed worktr
 
 Tip: `alias worktree='vendor/bin/worktree'`.
 
-> **With Sail or Docker Compose, don't call `sail` or `docker compose` directly inside a worktree, including from git hooks.** They exec into whichever container is already running, which is usually mounted on the main checkout, so commands run against the wrong code and database (a pre-commit `sail pint --dirty` formats the main checkout's files). `vendor/bin/worktree` always targets the current worktree. `install` and `setup` warn about hooks that call `sail`.
+> **Git hooks that call `sail` or `docker compose` work in worktrees unchanged.** Setup points them at the worktree through its `.env`: `COMPOSE_PROJECT_NAME` and `COMPOSE_FILE` for Docker Compose, and `SAIL_DOCKER_BINARY` for Sail on the `docker-image` runtime (laravel/sail 1.55+). With `docker-image`, sail only runs commands in the app container (no `sail up`), and a plain `docker compose exec` still reaches the main checkout's container, so use `vendor/bin/worktree` there. `install` and `setup` warn about hooks that won't reach the worktree.
 
 To use one command in every checkout, e.g. `bash vendor/bin/worktree php vendor/bin/pint $STAGED_FILES` in a git hook, set `WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true`. In the main checkout it then runs in your usual runtime: on the host, in your running Compose service, or in a fresh container of the image. Inside a container (Sail, or one `vendor/bin/worktree` started) it runs the command directly.
 
@@ -68,7 +68,7 @@ To use one command in every checkout, e.g. `bash vendor/bin/worktree php vendor/
 
 1. Copies `.env`, `.env.testing` (or `.env.testing.example`) and any `WORKTREE_COPY_FILES` from the main checkout, if the worktree doesn't have them.
 2. Points them at the worktree's own databases (see below), before anything else runs.
-3. Docker Compose only: starts the worktree's own stack with `docker compose -p <project>-<worktree> up -d`.
+3. Docker Compose only: starts the worktree's own stack with `docker compose -p <project>-<worktree> up -d`, and writes that project and its compose files into `.env` for `sail` and `docker compose`.
 4. Runs `composer install`.
 5. Creates the test and development databases. A new development database is migrated and seeded; an existing one is only migrated.
 6. If there's a `package.json`, runs `npm install` (or `pnpm`, `yarn` or `bun`, by lockfile). A failure here only warns.

@@ -147,6 +147,7 @@ if [[ "$RUNTIME" == "docker-compose" ]]; then
     echo ""
     echo "Starting Docker Compose stack ($COMPOSE_PROJECT_NAME)..."
     write_compose_override
+    [[ ! -f "$ENV_PATH" ]] || point_compose_at_worktree_stack "$ENV_PATH"
     "${COMPOSE_ARGS[@]}" up -d
 fi
 
@@ -156,6 +157,14 @@ fi
 echo ""
 echo "Installing Composer dependencies..."
 run_in_runtime composer install --no-interaction --no-progress
+
+# Sail 1.55+ reaches docker through SAIL_DOCKER_BINARY, read from .env, so an
+# unchanged `sail ...` (e.g. in a project's git hook) runs in this worktree.
+SAIL_DOCKER=""
+if [[ "$RUNTIME" == docker-image && -f "$ENV_PATH" ]] && sail_docker_binary_usable "$PROJECT_ROOT" "$SCRIPT_DIR/sail-docker"; then
+    SAIL_DOCKER="$SCRIPT_DIR/sail-docker"
+    set_env_file_value "$ENV_PATH" SAIL_DOCKER_BINARY "$SAIL_DOCKER"
+fi
 
 # ---------------------------------------------------------------------------
 # 6. Per-worktree databases
@@ -279,5 +288,5 @@ fi
 # Done
 # ---------------------------------------------------------------------------
 echo ""
-warn_about_hooks_calling_sail "$PROJECT_ROOT"
+warn_about_hooks_calling_sail "$PROJECT_ROOT" "$RUNTIME" "$SAIL_DOCKER"
 echo "Worktree setup complete. You can now run tests with: vendor/bin/worktree test"

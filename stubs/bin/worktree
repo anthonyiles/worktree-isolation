@@ -114,13 +114,6 @@ case "$RUNTIME" in
         ;;
 
     docker-image)
-        build_docker_image_args
-        DOCKER_ARGS+=(-i)
-        [[ "$IS_TTY" == true ]] && DOCKER_ARGS+=(-t)
-
-        # Overriding --entrypoint with the passthrough command's first token
-        # is the same pattern worktree-setup uses per-command (--entrypoint
-        # composer / --entrypoint npm), generalized to any command.
-        exec "${DOCKER_ARGS[@]}" --entrypoint "$COMMAND" "$IMAGE" "$@"
+        exec_in_docker_image -- "$COMMAND" "$@"
         ;;
 esac
