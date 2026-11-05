@@ -53,8 +53,8 @@ setup() {
 @test "truncates an overlong development database name with a hash" {
     run derive_dev_database_name "myapp" "$(printf 'a%.0s' {1..64})"
     [ "$status" -eq 0 ]
-    [ "$output" = "myapp_wt_$(printf 'a%.0s' {1..46})-0098ba82" ]
-    [ "${#output}" -eq 64 ]
+    [ "$output" = "myapp_wt_$(printf 'a%.0s' {1..45})-0098ba82" ]
+    [ "${#output}" -eq 63 ]
 }
 
 @test "derives a test database name that must mention test and fit in 40 characters" {
@@ -315,4 +315,31 @@ XML
     first="$(clone_id)"
     [[ "$first" =~ ^[0-9a-f]{4}$ ]]
     [ "$(clone_id)" = "$first" ]
+}
+
+@test "keeps a SQLite path the worktree's own" {
+    PROJECT_ROOT=/wt MAIN_DIR=/main WORKDIR=/var/www/html RUNTIME=native
+    [ "$(sqlite_worktree_path "")" = "$(printf '\t/wt/database/database.sqlite')" ]
+    [ "$(sqlite_worktree_path database/app.sqlite)" = "$(printf 'database/app.sqlite\t/wt/database/app.sqlite')" ]
+    [ "$(sqlite_worktree_path /main/database/app.sqlite)" = "$(printf '/wt/database/app.sqlite\t/wt/database/app.sqlite')" ]
+    [ "$(sqlite_worktree_path /wt/database/app.sqlite)" = "$(printf '/wt/database/app.sqlite\t/wt/database/app.sqlite')" ]
+    [ "$(sqlite_worktree_path /srv/dbs/app.sqlite)" = "$(printf '/wt/database/app.sqlite\t/wt/database/app.sqlite')" ]
+    [ -z "$(sqlite_worktree_path :memory:)" ]
+
+    RUNTIME=docker-image
+    [ "$(sqlite_worktree_path /var/www/html/database/app.sqlite)" = "$(printf '/var/www/html/database/app.sqlite\t/wt/database/app.sqlite')" ]
+    run sqlite_worktree_path /srv/dbs/app.sqlite
+    [ "$status" -eq 1 ]
+}
+
+@test "the database snippets pick PostgreSQL from DB_CONNECTION" {
+    command -v php > /dev/null || skip "needs PHP"
+
+    DB_CONNECTION=pgsql DB_HOST=127.0.0.1 DB_PORT=1 DB_DATABASE=myapp_wt_x run php -r "$ENSURE_DB_PHP"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Could not connect to the database server"* ]]
+    [[ "$output" != *"[2002]"* ]]
+    DB_CONNECTION=pgsql DB_HOST=127.0.0.1 DB_PORT=1 DROP_DATABASES=myapp_wt_x run php -r "$DROP_DB_PHP"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Could not connect to the database server"* ]]
 }
