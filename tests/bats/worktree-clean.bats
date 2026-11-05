@@ -115,3 +115,13 @@ devhost myapp_wt_gone-c0de" ]
     [[ "$output" == *"could not drop the development databases"*"Could not connect to the database server"* ]]
     [ -s "$LEDGER/gone" ]
 }
+
+@test "drops PostgreSQL databases with the pgsql connection" {
+    printf 'DB_CONNECTION=pgsql\nDB_HOST=pghost\nDB_DATABASE=myapp\n' > .env
+    printf '#!/usr/bin/env bash\necho "$DB_CONNECTION $DB_HOST $DROP_DATABASES" >> "%s"\nfor name in $DROP_DATABASES; do echo "dropped $name"; done\n' "$PHP_LOG" > "$FAKE_BIN/php"
+
+    run clean --force
+    [ "$status" -eq 0 ]
+    [ "$(cat "$PHP_LOG")" = "pgsql pghost myapp_test_wt_gone-c0de
+pgsql pghost myapp_wt_gone-c0de" ]
+}

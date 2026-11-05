@@ -301,11 +301,11 @@ main_test_database() {
 # Worktrees' test databases are named after the main checkout's development
 # database, "{name}_test_wt_{worktree}", so no testing env file is needed.
 # The name is cut to 16 bytes to leave the worktree room within 40. Falls
-# back to "testing" when .env has no MySQL/MariaDB database.
+# back to "testing" when .env has no database on a server.
 test_database_base() {
     local LC_ALL=C env name=""
     env="$(main_checkout_dir)/.env"
-    if is_mysql_connection "$env"; then
+    if [[ "$(env_file_value "$env" DB_CONNECTION)" =~ $SERVER_CONNECTIONS ]]; then
         name="$(env_file_value "$env" DB_DATABASE)"
         name="${name%%_wt_*}"
         name="${name:0:16}"
@@ -320,9 +320,13 @@ test_database_base() {
     fi
 }
 
-# Per-worktree test databases apply when the tests use MySQL/MariaDB.
-tests_use_mysql() {
-    [[ "$(test_db_setting "$PROJECT_ROOT" DB_CONNECTION)" =~ ^(mysql|mariadb)$ ]]
+# Connections whose per-worktree databases are created on a database server.
+# SQLite's are files in the worktree (see sqlite_worktree_path).
+SERVER_CONNECTIONS='^(mysql|mariadb|pgsql)$'
+
+# The connection the tests use.
+tests_connection() {
+    test_db_setting "$PROJECT_ROOT" DB_CONNECTION || true
 }
 
 # Usage: test_db_setting DIR KEY
@@ -343,7 +347,53 @@ test_db_setting() {
 }
 
 # The connection settings passed to the database snippets.
-DB_SETTING_KEYS=(DB_HOST DB_PORT DB_SOCKET DB_USERNAME DB_PASSWORD DB_CHARSET DB_COLLATION MYSQL_ATTR_SSL_CA)
+DB_SETTING_KEYS=(DB_CONNECTION DB_HOST DB_PORT DB_SOCKET DB_USERNAME DB_PASSWORD DB_CHARSET DB_COLLATION DB_SSLMODE MYSQL_ATTR_SSL_CA)
+
+# Usage: sqlite_worktree_path VALUE
+# A SQLite DB_DATABASE as the worktree should have it, so it doesn't share
+# the main checkout's file, and the file that is on the host, tab-separated.
+# Laravel's default (no value) and relative paths are already the
+# worktree's own. An absolute path into the main checkout moves to the same
+# place in the worktree; natively, one outside the project moves into the
+# worktree's database/. In a Docker runtime the project is always mounted at
+# WORKDIR, so a path under it is the worktree's own, and one outside it
+# can't be kept apart: that fails. Prints nothing for an in-memory database.
+sqlite_worktree_path() {
+    local value="$1"
+    case "$value" in
+        :memory: | *mode=memory*)
+            return 0
+            ;;
+        "")
+            printf '\t%s\n' "$PROJECT_ROOT/database/database.sqlite"
+            ;;
+        /*)
+            if [[ "$RUNTIME" != native ]]; then
+                [[ "$value" == "$WORKDIR"/* ]] || return 1
+                printf '%s\t%s\n' "$value" "$PROJECT_ROOT/${value#"$WORKDIR"/}"
+            elif [[ "$value" == "$PROJECT_ROOT"/* ]]; then
+                printf '%s\t%s\n' "$value" "$value"
+            elif [[ "$value" == "$MAIN_DIR"/* ]]; then
+                printf '%s\t%s\n' "$PROJECT_ROOT/${value#"$MAIN_DIR"/}" "$PROJECT_ROOT/${value#"$MAIN_DIR"/}"
+            else
+                printf '%s\t%s\n' "$PROJECT_ROOT/database/${value##*/}" "$PROJECT_ROOT/database/${value##*/}"
+            fi
+            ;;
+        *)
+            printf '%s\t%s\n' "$value" "$PROJECT_ROOT/$value"
+            ;;
+    esac
+}
+
+# Usage: ensure_sqlite_file PATH
+# Prints "created" or "existing".
+ensure_sqlite_file() {
+    if [[ -e "$1" ]]; then
+        echo existing
+    else
+        mkdir -p "$(dirname "$1")" && : > "$1" && echo created
+    fi
+}
 
 # Usage: db_env_args test|development DIR
 # Fills DB_ENV with "-e KEY=value" for the connection settings a kind of
@@ -500,8 +550,9 @@ derive_worktree_database_name() {
     echo "${base}_wt_${suffix}"
 }
 
+# 63 bytes: PostgreSQL's limit (MySQL's is 64).
 derive_dev_database_name() {
-    derive_worktree_database_name "$1" "$2" 64
+    derive_worktree_database_name "$1" "$2" 63
 }
 
 # The "test" check runs on the base: a worktree named e.g. "test-refactor"
@@ -643,24 +694,35 @@ record_database() {
 }
 
 # PHP only reaches the database server, inside the runtime, with everything
-# it needs in the environment (DB_* and MYSQL_ATTR_SSL_CA, as Laravel names
-# them). There's no autoloader: the worktree's vendor/ may hold another
-# release of this package, or nothing yet.
+# it needs in the environment, as Laravel names it: DB_CONNECTION (pgsql, or
+# else MySQL/MariaDB), DB_* and MYSQL_ATTR_SSL_CA. PostgreSQL is reached
+# through its "postgres" maintenance database. There's no autoloader: the
+# worktree's vendor/ may hold another release of this package, or nothing
+# yet. No single quotes in here: the snippets are single-quoted bash strings.
 # shellcheck disable=SC2016 # PHP code, expanded by PHP
 DB_CONNECT_PHP='
+    $pgsql = getenv("DB_CONNECTION") === "pgsql";
     try {
-        $dsn = getenv("DB_SOCKET")
-            ? "mysql:unix_socket=" . getenv("DB_SOCKET")
-            : "mysql:host=" . (getenv("DB_HOST") ?: "127.0.0.1") . ";port=" . (getenv("DB_PORT") ?: 3306);
         $options = [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION];
-        if (getenv("MYSQL_ATTR_SSL_CA")) {
-            $options[defined("Pdo\\Mysql::ATTR_SSL_CA") ? constant("Pdo\\Mysql::ATTR_SSL_CA") : PDO::MYSQL_ATTR_SSL_CA] = getenv("MYSQL_ATTR_SSL_CA");
+        if ($pgsql) {
+            $dsn = "pgsql:host=" . (getenv("DB_HOST") ?: "127.0.0.1") . ";port=" . (getenv("DB_PORT") ?: 5432) . ";dbname=postgres";
+            if (getenv("DB_SSLMODE")) {
+                $dsn .= ";sslmode=" . getenv("DB_SSLMODE");
+            }
+        } else {
+            $dsn = getenv("DB_SOCKET")
+                ? "mysql:unix_socket=" . getenv("DB_SOCKET")
+                : "mysql:host=" . (getenv("DB_HOST") ?: "127.0.0.1") . ";port=" . (getenv("DB_PORT") ?: 3306);
+            if (getenv("MYSQL_ATTR_SSL_CA")) {
+                $options[defined("Pdo\\Mysql::ATTR_SSL_CA") ? constant("Pdo\\Mysql::ATTR_SSL_CA") : PDO::MYSQL_ATTR_SSL_CA] = getenv("MYSQL_ATTR_SSL_CA");
+            }
         }
         $pdo = new PDO($dsn, getenv("DB_USERNAME") ?: "", getenv("DB_PASSWORD") ?: "", $options);
     } catch (Throwable $e) {
         fwrite(STDERR, "Could not connect to the database server: " . $e->getMessage() . "\n");
         exit(1);
     }
+    $quote = fn ($name) => $pgsql ? "\"$name\"" : "`$name`";
 '
 
 # shellcheck disable=SC2016 # PHP code, expanded by PHP
@@ -669,10 +731,10 @@ DB_NAME_PHP='
 '
 
 # Creates the per-worktree database named by DB_DATABASE, which bash already
-# derived, in DB_CHARSET/DB_COLLATION when set. Refuses anything that isn't a
-# per-worktree name or is the main checkout's (MAIN_DB_DATABASE). Prints
-# "<name> created|existing" as its last line; the leading newline keeps that
-# line intact if PHP emitted a notice first.
+# derived; on MySQL/MariaDB in DB_CHARSET/DB_COLLATION when set. Refuses
+# anything that isn't a per-worktree name or is the main checkout's
+# (MAIN_DB_DATABASE). Prints "<name> created|existing" as its last line; the
+# leading newline keeps that line intact if PHP emitted a notice first.
 # shellcheck disable=SC2016 # PHP code, expanded by PHP
 ENSURE_DB_PHP="$DB_NAME_PHP"'
     $name = (string) getenv("DB_DATABASE");
@@ -681,33 +743,50 @@ ENSURE_DB_PHP="$DB_NAME_PHP"'
         exit(1);
     }
 '"$DB_CONNECT_PHP"'
-    $exists = $pdo->prepare("SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?");
+    $exists = $pdo->prepare($pgsql
+        ? "SELECT 1 FROM pg_database WHERE datname = ?"
+        : "SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?");
     $exists->execute([$name]);
     if ($exists->fetchColumn()) {
         echo "\n$name existing";
         exit;
     }
-    $sql = "CREATE DATABASE IF NOT EXISTS `$name`";
-    foreach (["CHARACTER SET" => "DB_CHARSET", "COLLATE" => "DB_COLLATION"] as $clause => $key) {
-        if (preg_match("/^[A-Za-z0-9_]+$/", (string) getenv($key)) === 1) {
-            $sql .= " $clause " . getenv($key);
+    if ($pgsql) {
+        try {
+            $pdo->exec("CREATE DATABASE " . $quote($name));
+        } catch (PDOException $e) {
+            // 42P04: created by someone else in the meantime.
+            if ($e->getCode() !== "42P04") {
+                throw $e;
+            }
+            echo "\n$name existing";
+            exit;
         }
+    } else {
+        $sql = "CREATE DATABASE IF NOT EXISTS " . $quote($name);
+        foreach (["CHARACTER SET" => "DB_CHARSET", "COLLATE" => "DB_COLLATION"] as $clause => $key) {
+            if (preg_match("/^[A-Za-z0-9_]+$/", (string) getenv($key)) === 1) {
+                $sql .= " $clause " . getenv($key);
+            }
+        }
+        $pdo->exec($sql);
     }
-    $pdo->exec($sql);
     echo "\n$name created";
 '
 
 # Drops the space-separated DROP_DATABASES, if they're per-worktree names.
+# PostgreSQL 13+ drops them even while something is still connected.
 # Prints "dropped <name>" or "failed <name>: <reason>" per database.
 # shellcheck disable=SC2016 # PHP code, expanded by PHP
 DROP_DB_PHP="$DB_NAME_PHP$DB_CONNECT_PHP"'
+    $force = $pgsql && (int) $pdo->getAttribute(PDO::ATTR_SERVER_VERSION) >= 13 ? " WITH (FORCE)" : "";
     foreach (preg_split("/\s+/", trim((string) getenv("DROP_DATABASES")), -1, PREG_SPLIT_NO_EMPTY) as $name) {
         if (! $isWorktreeDatabase($name)) {
             echo "failed $name: not a per-worktree database name\n";
             continue;
         }
         try {
-            $pdo->exec("DROP DATABASE IF EXISTS `$name`");
+            $pdo->exec("DROP DATABASE IF EXISTS " . $quote($name) . $force);
             echo "dropped $name\n";
         } catch (PDOException $e) {
             echo "failed $name: ", $e->getMessage(), "\n";
@@ -1089,9 +1168,6 @@ set_env_file_value() {
     rm -f "$tmp"
 }
 
-is_mysql_connection() {
-    [[ "$(env_file_value "$1" DB_CONNECTION)" =~ ^(mysql|mariadb)$ ]]
-}
 
 # Usage: sail_docker_binary_usable DIR SAIL_DOCKER
 # Whether the checkout's Sail runs docker through SAIL_DOCKER_BINARY (1.55+),

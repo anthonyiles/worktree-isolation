@@ -66,7 +66,8 @@ cache_phpunit "$PROJECT_ROOT"
 
 # The test database is passed in the environment, which beats .env,
 # .env.testing and phpunit.xml's <env>, so no file needs to name it.
-if tests_use_mysql; then
+TEST_CONNECTION="$(tests_connection)"
+if [[ "$TEST_CONNECTION" =~ $SERVER_CONNECTIONS ]]; then
     if ! DB_DATABASE="$(derive_test_database_name "$(test_database_base)" "$WORKTREE_KEY")"; then
         echo "Error: could not derive the per-worktree test database from '$(test_database_base)'." >&2
         exit 1
@@ -80,8 +81,16 @@ if tests_use_mysql; then
         -e "DB_DATABASE=$DB_DATABASE"
         ${DB_ENV[@]+"${DB_ENV[@]}"}
     )
-    if value="$(test_db_setting "$PROJECT_ROOT" DB_CONNECTION)"; then
-        TEST_ENV+=(-e "DB_CONNECTION=$value")
+elif [[ "$TEST_CONNECTION" == sqlite ]]; then
+    if ! sqlite="$(sqlite_worktree_path "$(test_db_setting "$PROJECT_ROOT" DB_DATABASE || true)")"; then
+        echo "Warning: the tests' SQLite DB_DATABASE is outside $WORKDIR, so this worktree shares that file." >&2
+    elif [[ -n "$sqlite" ]]; then
+        ensure_sqlite_file "${sqlite#*$'\t'}" > /dev/null
+        if [[ -n "${sqlite%%$'\t'*}" ]]; then
+            DB_DATABASE="${sqlite%%$'\t'*}"
+            warn_if_phpunit_forces_database
+            TEST_ENV+=(-e "DB_DATABASE=$DB_DATABASE")
+        fi
     fi
 fi
 
