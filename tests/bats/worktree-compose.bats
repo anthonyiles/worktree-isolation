@@ -15,7 +15,7 @@ setup() {
     [ "$status" -eq 0 ]
 
     run grep -- " exec " "$DOCKER_LOG"
-    [[ "$output" == *"-p myapp-feature-auth"* ]]
+    [[ "$output" == *"-p myapp-feature-auth-c0de"* ]]
     [[ "$output" == *"composer require guzzlehttp/guzzle"* ]]
 }
 
@@ -24,7 +24,7 @@ setup() {
     [ "$status" -eq 0 ]
 
     run grep -- " exec " "$DOCKER_LOG"
-    [[ "$output" == *"-p myapp-feature-auth"* ]]
+    [[ "$output" == *"-p myapp-feature-auth-c0de"* ]]
     [[ "$output" == *"npm run dev"* ]]
 }
 
@@ -41,7 +41,7 @@ setup() {
 
 @test "keeps a compose file path with spaces as a single argument" {
     log_docker_argv
-    echo "WORKTREE_COMPOSE_FILE=\"my compose.yml\"" >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo "WORKTREE_COMPOSE_FILE=\"my compose.yml\"" >> "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/worktree" php -v
     [ "$status" -eq 0 ]
@@ -59,7 +59,7 @@ setup() {
 }
 
 @test "falls back to the main checkout's directory name when WORKTREE_COMPOSE_PROJECT_BASE is unset" {
-    sed -i.bak '/^WORKTREE_COMPOSE_PROJECT_BASE=/d' "$WORKTREE_DIR/.worktree-isolation.env"
+    sed -i.bak '/^WORKTREE_COMPOSE_PROJECT_BASE=/d' "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/worktree" php -v
     [ "$status" -eq 0 ]
@@ -69,7 +69,6 @@ setup() {
 }
 
 @test "refuses to run in the main checkout" {
-    cp "$WORKTREE_DIR/.worktree-isolation.env" "$MAIN_REPO/"
     cd "$MAIN_REPO"
 
     run bash "$STUBS_DIR/worktree" php -v
@@ -83,7 +82,7 @@ setup() {
 }
 
 @test "native passthrough runs from the worktree root" {
-    echo "WORKTREE_RUNTIME=native" > "$WORKTREE_DIR/.worktree-isolation.env"
+    echo "WORKTREE_RUNTIME=native" > "$MAIN_REPO/.worktree-isolation.env"
     mkdir -p "$WORKTREE_DIR/app/Models"
     cd "$WORKTREE_DIR/app/Models"
 
@@ -103,6 +102,8 @@ setup() {
 @test "setup passes the host user to Sail's compose file as WWWUSER/WWWGROUP" {
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
+[[ " \$* " != *" compose version "* ]] || echo 2.29.0
+[[ " \$* " != *" config --services"* ]] || echo app
 echo "\$* WWWUSER=\$WWWUSER WWWGROUP=\$WWWGROUP" >> "$DOCKER_LOG"
 SCRIPT
 
@@ -116,6 +117,8 @@ SCRIPT
 @test "keeps a WWWUSER that's already set" {
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
+[[ " \$* " != *" compose version "* ]] || echo 2.29.0
+[[ " \$* " != *" config --services"* ]] || echo app
 echo "\$* WWWUSER=\$WWWUSER" >> "$DOCKER_LOG"
 SCRIPT
 
@@ -126,65 +129,58 @@ SCRIPT
     [[ "$output" == *"WWWUSER=4242"* ]]
 }
 
-install_stubs_in_vendor() {
-    VENDOR_BIN="$1/vendor/anthonyiles/worktree-isolation/stubs/bin"
-    mkdir -p "$VENDOR_BIN"
-    cp "$STUBS_DIR"/* "$VENDOR_BIN/"
-    cp -R "$STUBS_DIR/../../src" "$VENDOR_BIN/../../src"
+# A database recorded for a worktree that's since been removed.
+record_removed_worktree_database() {
+    mkdir -p "$MAIN_REPO/.git/worktree-isolation/databases"
+    printf 'test\ttesting_wt_gone-c0de\n' > "$MAIN_REPO/.git/worktree-isolation/databases/gone"
 }
 
 @test "runs clean inside the worktree's stack, where DB_HOST resolves" {
-    install_stubs_in_vendor "$WORKTREE_DIR"
+    record_removed_worktree_database
 
-    run bash "$VENDOR_BIN/worktree" clean --force
+    run bash "$STUBS_DIR/worktree" clean --force
     [ "$status" -eq 0 ]
 
     run grep -- " exec " "$DOCKER_LOG"
-    [[ "$output" == *"-p myapp-feature-auth"* ]]
-    [[ "$output" == *"app php vendor/anthonyiles/worktree-isolation/stubs/bin/worktree-clean --force"* ]]
+    [[ "$output" == *"-p myapp-feature-auth-c0de"* ]]
+    [[ "$output" == *"-e DROP_DATABASES=testing_wt_gone-c0de app php -r"* ]]
 }
 
 @test "runs clean from the main checkout inside its default-project stack" {
-    install_stubs_in_vendor "$MAIN_REPO"
-    cp "$WORKTREE_DIR/.worktree-isolation.env" "$MAIN_REPO/"
+    record_removed_worktree_database
     cd "$MAIN_REPO"
 
-    run bash "$VENDOR_BIN/worktree" clean
+    run bash "$STUBS_DIR/worktree" clean --force
     [ "$status" -eq 0 ]
 
     run grep -- " exec " "$DOCKER_LOG"
     [[ "$output" != *"-p "* ]]
-    [[ "$output" == *"app php vendor/anthonyiles/worktree-isolation/stubs/bin/worktree-clean"* ]]
-}
-
-@test "refuses to run clean in the runtime when the package is outside the project" {
-    run bash "$STUBS_DIR/worktree" clean
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"is outside the project"* ]]
+    [[ "$output" == *"-e DROP_DATABASES=testing_wt_gone-c0de app php -r"* ]]
 }
 
 @test "runs clean directly when already inside Sail" {
-    install_stubs_in_vendor "$WORKTREE_DIR"
+    record_removed_worktree_database
     # Port 1 refuses connections, so no database server is needed. Clean
     # takes the database settings from the main checkout.
     printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=testing\n' > "$MAIN_REPO/.env.testing"
 
-    LARAVEL_SAIL=1 run bash "$VENDOR_BIN/worktree" clean --force
-
-    [[ "$output" == *"Could not connect to the test database server"* ]]
+    LARAVEL_SAIL=1 run bash "$STUBS_DIR/worktree" clean --force
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"could not drop the test databases"*"Could not connect to the database server"* ]]
+    [ -s "$MAIN_REPO/.git/worktree-isolation/databases/gone" ]
     run grep -- " exec " "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
 
-@test "fails in a worktree whose branch has no .worktree-isolation.env" {
-    rm "$WORKTREE_DIR/.worktree-isolation.env"
+@test "fails when the main checkout has no .worktree-isolation.env" {
+    rm "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/worktree" composer install
     [ "$status" -eq 1 ]
-    [[ "$output" == *"its branch predates worktree-isolation"* ]]
+    [[ "$output" == *".worktree-isolation.env not found in the main checkout"* ]]
     [ ! -s "$DOCKER_LOG" ]
 
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"its branch predates worktree-isolation"* ]]
+    [[ "$output" == *".worktree-isolation.env not found in the main checkout"* ]]
 }

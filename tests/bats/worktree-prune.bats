@@ -26,7 +26,17 @@ setup() {
     STUBS_DIR="$MAIN_REPO/vendor/anthonyiles/worktree-isolation/stubs/bin"
     mkdir -p "$STUBS_DIR"
     cp "$REAL_STUBS_DIR"/* "$STUBS_DIR/"
-    cp -R "$REAL_STUBS_DIR/../../src" "$STUBS_DIR/../../src"
+    # A fixed clone id, so the derived names are predictable.
+    mkdir -p .git/worktree-isolation
+    echo c0de > .git/worktree-isolation/clone-id
+}
+
+# Usage: age_worktree NAME — no git activity in it since 2020.
+age_worktree() {
+    local admin="$MAIN_REPO/.git/worktrees/$1" file
+    for file in "$admin/HEAD" "$admin/index" "$admin/logs/HEAD"; do
+        [[ ! -e "$file" ]] || touch -t 202001010000 "$file"
+    done
 }
 
 # Usage: add_worktree NAME — on a new branch NAME with one commit.
@@ -87,8 +97,8 @@ prune() {
 
     run prune --force
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Keeping $WORKTREES/dirty (dirty is merged, but the worktree has uncommitted or untracked changes)"* ]]
-    [[ "$output" == *"No merged worktrees to remove."* ]]
+    [[ "$output" == *"Keeping $WORKTREES/dirty (dirty is merged into origin/main, but the worktree has uncommitted or untracked changes)"* ]]
+    [[ "$output" == *"No worktrees to remove."* ]]
     for name in open fresh dirty locked detached; do
         [ -d "$WORKTREES/$name" ]
     done
@@ -101,7 +111,7 @@ prune() {
 
     run prune --force
     [ "$status" -eq 0 ]
-    [[ "$output" == *"No merged worktrees to remove."* ]]
+    [[ "$output" == *"No worktrees to remove."* ]]
 }
 
 @test "cleans up after a worktree whose directory was deleted" {
@@ -114,7 +124,7 @@ prune() {
     [ "$(git worktree list | wc -l)" -eq 1 ]
 }
 
-@test "--dry-run and WORKTREE_PRUNE=report only list them" {
+@test "--dry-run only lists them" {
     add_worktree merged
     merge_and_push merged
 
@@ -122,22 +132,56 @@ prune() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"Remove them with: vendor/bin/worktree prune --force"* ]]
     [ -d "$WORKTREES/merged" ]
-
-    echo "WORKTREE_PRUNE=report" >> .worktree-isolation.env
-    run prune
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Remove them with"* ]]
-    [ -d "$WORKTREES/merged" ]
 }
 
-@test "WORKTREE_PRUNE=remove removes them without asking" {
+@test "--auto removes them without asking, at most once an hour" {
     add_worktree merged
     merge_and_push merged
-    echo "WORKTREE_PRUNE=remove" >> .worktree-isolation.env
 
-    run prune
+    run prune --auto
     [ "$status" -eq 0 ]
     [ ! -d "$WORKTREES/merged" ]
+
+    add_worktree merged-too
+    merge_and_push merged-too
+    run prune --auto
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ -d "$WORKTREES/merged-too" ]
+
+    touch -t 202001010000 .git/worktree-isolation/last-prune
+    run prune --auto
+    [ "$status" -eq 0 ]
+    [ ! -d "$WORKTREES/merged-too" ]
+}
+
+@test "removes worktrees idle for WORKTREE_PRUNE_AFTER days, keeping their branches" {
+    add_worktree idle
+    add_worktree busy
+    add_worktree idle-dirty
+    touch "$WORKTREES/idle-dirty/notes.txt"
+    age_worktree idle
+    age_worktree idle-dirty
+
+    run prune --force
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$WORKTREES/idle (no git activity for 7 days; idle is kept)"* ]]
+    [[ "$output" == *"Keeping $WORKTREES/idle-dirty (no git activity for 7 days; idle-dirty is kept, but the worktree has uncommitted or untracked changes)"* ]]
+    [ ! -d "$WORKTREES/idle" ]
+    [ -d "$WORKTREES/busy" ]
+    [ -d "$WORKTREES/idle-dirty" ]
+    git rev-parse --verify -q idle
+}
+
+@test "WORKTREE_PRUNE_AFTER=0 never removes idle worktrees" {
+    add_worktree idle
+    age_worktree idle
+    echo "WORKTREE_PRUNE_AFTER=0" >> .worktree-isolation.env
+
+    run prune --force
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No worktrees to remove."* ]]
+    [ -d "$WORKTREES/idle" ]
 }
 
 @test "asks only with a terminal" {
@@ -163,19 +207,30 @@ prune() {
     [ ! -d "$WORKTREES/merged" ]
 }
 
-@test "drops the removed worktrees' databases through clean" {
+@test "drops only the removed worktrees' recorded databases" {
     add_worktree merged
     merge_and_push merged
     add_worktree open
+    mkdir -p .git/worktree-isolation/databases
+    printf 'test\ttesting_wt_merged-c0de\ndevelopment\tmyapp_wt_merged-c0de\n' > .git/worktree-isolation/databases/merged
+    printf 'test\ttesting_wt_open-c0de\n' > .git/worktree-isolation/databases/open
+    printf 'DB_CONNECTION=mysql\nDB_DATABASE=myapp\nDB_HOST=db\n' > .env
     FAKE_BIN="$BATS_TEST_TMPDIR/fakebin"
     mkdir -p "$FAKE_BIN"
-    printf '#!/usr/bin/env bash\necho "php $*" >> "%s"\n' "$BATS_TEST_TMPDIR/php.log" > "$FAKE_BIN/php"
+    cat > "$FAKE_BIN/php" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$DB_HOST \$DROP_DATABASES" >> "$BATS_TEST_TMPDIR/php.log"
+for name in \$DROP_DATABASES; do echo "dropped \$name"; done
+SCRIPT
     chmod +x "$FAKE_BIN/php"
-    printf 'DB_CONNECTION=mysql\nDB_DATABASE=testing\n' > .env.testing
 
     PATH="$FAKE_BIN:$PATH" run prune --force
     [ "$status" -eq 0 ]
-    [[ "$(cat "$BATS_TEST_TMPDIR/php.log")" == *"worktree-clean --force --keep=testing_wt_open" ]]
+    [[ "$output" == *"Dropped: testing_wt_merged-c0de"*"Dropped: myapp_wt_merged-c0de"* ]]
+    [ "$(cat "$BATS_TEST_TMPDIR/php.log")" = "db testing_wt_merged-c0de
+db myapp_wt_merged-c0de" ]
+    [ ! -e .git/worktree-isolation/databases/merged ]
+    [ -e .git/worktree-isolation/databases/open ]
 }
 
 @test "takes the Compose stack down first, and keeps the worktree if that fails" {
@@ -186,6 +241,8 @@ prune() {
     mkdir -p "$FAKE_BIN"
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
+[[ " \$* " != *" compose version "* ]] || echo 2.29.0
+[[ " \$* " != *" config --services"* ]] || echo app
 echo "docker \$*" >> "$BATS_TEST_TMPDIR/docker.log"
 [[ "\$*" != *" ps "* ]] || echo app
 [[ "\$*" != *" down "* || -z "\${FAIL_DOWN:-}" ]]
@@ -194,14 +251,13 @@ SCRIPT
 
     FAIL_DOWN=1 PATH="$FAKE_BIN:$PATH" run prune --force
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Could not remove the Compose stack myapp-merged, so $WORKTREES/merged is kept."* ]]
+    [[ "$output" == *"Could not remove the Compose stack myapp-merged-c0de, so $WORKTREES/merged is kept."* ]]
     [ -d "$WORKTREES/merged" ]
 
     PATH="$FAKE_BIN:$PATH" run prune --force
     [ "$status" -eq 0 ]
     [ ! -d "$WORKTREES/merged" ]
-    grep -q -- "docker compose -p myapp-merged down -v --remove-orphans" "$BATS_TEST_TMPDIR/docker.log"
-    grep -q -- "worktree-clean --force --keep=" "$BATS_TEST_TMPDIR/docker.log"
+    grep -q -- "docker compose -p myapp-merged-c0de down -v --remove-orphans" "$BATS_TEST_TMPDIR/docker.log"
 }
 
 @test "checks against WORKTREE_PRUNE_BRANCH when set" {
@@ -248,10 +304,10 @@ SCRIPT
     [[ "$output" == *"git remote set-head origin --auto"* ]]
 }
 
-@test "rejects an unknown WORKTREE_PRUNE" {
-    echo "WORKTREE_PRUNE=always" >> .worktree-isolation.env
+@test "rejects a WORKTREE_PRUNE_AFTER that isn't a number of days" {
+    echo "WORKTREE_PRUNE_AFTER=1w" >> .worktree-isolation.env
 
     run prune
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Unknown WORKTREE_PRUNE 'always'"* ]]
+    [[ "$output" == *"WORKTREE_PRUNE_AFTER must be a number of days, not '1w'"* ]]
 }

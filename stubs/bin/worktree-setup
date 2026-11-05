@@ -69,6 +69,21 @@ else
     echo "$TESTING_ENV_FILE already exists, skipping."
 fi
 
+# Other untracked files the project needs, e.g. auth.json.
+read -ra COPY_FILES <<< "${WORKTREE_COPY_FILES:-}"
+for file in ${COPY_FILES[@]+"${COPY_FILES[@]}"}; do
+    if [[ -e "$PROJECT_ROOT/$file" ]]; then
+        echo "$file already exists, skipping."
+    elif [[ -e "$MAIN_REPO/$file" ]]; then
+        mkdir -p "$(dirname "$PROJECT_ROOT/$file")"
+        cp -R "$MAIN_REPO/$file" "$PROJECT_ROOT/$file"
+        echo "Copied $file from main repo."
+    else
+        echo "Warning: $file not found in main repo." >&2
+    fi
+done
+cache_phpunit "$PROJECT_ROOT"
+
 # Per-worktree test databases only apply when the tests use MySQL/MariaDB;
 # anything else (e.g. SQLite) keeps its testing env untouched.
 TESTING_ENV_PATH="$PROJECT_ROOT/$TESTING_ENV_FILE"
@@ -102,19 +117,21 @@ TEST_DB=""
 DEV_DB=""
 
 if [[ "$DEV_DB_PER_WORKTREE" == true ]]; then
-    DEV_DB="$(derive_dev_database_name "${MAIN_DEV_DB:-$(env_file_value "$ENV_PATH" DB_DATABASE)}" "$WORKTREE_BASENAME")" || DEV_DB=""
+    DEV_DB="$(derive_dev_database_name "${MAIN_DEV_DB:-$(env_file_value "$ENV_PATH" DB_DATABASE)}" "$WORKTREE_KEY")" || DEV_DB=""
     [[ "$DEV_DB" != "$MAIN_DEV_DB" ]] || DEV_DB=""
     set_env_file_value "$ENV_PATH" DB_DATABASE "$DEV_DB"
+    [[ -z "$DEV_DB" ]] || record_database development "$DEV_DB"
 fi
 
 # vendor/bin/worktree test passes the test database in the environment. A
 # testing env file gets it too, so running the tests directly (php artisan
 # test, phpunit) doesn't use the main checkout's.
 if [[ "$TEST_DB_PER_WORKTREE" == true ]]; then
-    TEST_DB="$(derive_test_database_name "$(test_database_base)" "$WORKTREE_BASENAME")" || TEST_DB=""
+    TEST_DB="$(derive_test_database_name "$(test_database_base)" "$WORKTREE_KEY")" || TEST_DB=""
     if [[ "$TEST_DB" == "$MAIN_TEST_DB" || "$TEST_DB" == "$MAIN_DEV_DB" || ( -n "$DEV_DB" && "$TEST_DB" == "$DEV_DB" ) ]]; then
         TEST_DB=""
     fi
+    [[ -z "$TEST_DB" ]] || record_database test "$TEST_DB"
     [[ ! -f "$TESTING_ENV_PATH" ]] || set_env_file_value "$TESTING_ENV_PATH" DB_DATABASE "$TEST_DB"
     warn_if_phpunit_forces_database
 fi
@@ -129,6 +146,7 @@ fi
 if [[ "$RUNTIME" == "docker-compose" ]]; then
     echo ""
     echo "Starting Docker Compose stack ($COMPOSE_PROJECT_NAME)..."
+    write_compose_override
     "${COMPOSE_ARGS[@]}" up -d
 fi
 
@@ -146,23 +164,12 @@ run_in_runtime composer install --no-interaction --no-progress
 # Prints "<name> created|existing".
 ensure_worktree_database() {
     local kind="$1" name="$2" main_db="$3" output
-    output="$(run_in_runtime \
+    db_env_args "$kind" "$PROJECT_ROOT"
+    output="$(run_in_runtime ${DB_ENV[@]+"${DB_ENV[@]}"} \
         -e "MAIN_DB_DATABASE=$main_db" \
         -e "DB_DATABASE=$name" \
-        -e "DB_HOST=$(db_credential "$kind" DB_HOST)" \
-        -e "DB_PORT=$(db_credential "$kind" DB_PORT)" \
-        -e "DB_USERNAME=$(db_credential "$kind" DB_USERNAME)" \
-        -e "DB_PASSWORD=$(db_credential "$kind" DB_PASSWORD)" \
         php -r "$ENSURE_DB_PHP")" || return
     parse_ensure_db_output "$output"
-}
-
-db_credential() {
-    if [[ "$1" == test ]]; then
-        test_db_setting "$PROJECT_ROOT" "$2"
-    else
-        env_file_value "$ENV_PATH" "$2"
-    fi
 }
 
 # A freshly started Compose database can take a while to accept connections.
@@ -210,12 +217,12 @@ if [[ "$DEV_DB_PER_WORKTREE" == true ]]; then
 
         if [[ -n "$DEV_DB_MIGRATE_COMMAND" ]]; then
             echo "Running: $DEV_DB_MIGRATE_COMMAND"
-            run_in_runtime bash -c "$DEV_DB_MIGRATE_COMMAND" || echo "Warning: migrate command failed." >&2
+            run_in_runtime sh -c "$DEV_DB_MIGRATE_COMMAND" || echo "Warning: migrate command failed." >&2
         fi
         # Seeding isn't idempotent, so only seed a database this run created.
         if [[ -n "$DEV_DB_SEED_COMMAND" && "$result" == *" created" ]]; then
             echo "Running: $DEV_DB_SEED_COMMAND"
-            run_in_runtime bash -c "$DEV_DB_SEED_COMMAND" || echo "Warning: seed command failed." >&2
+            run_in_runtime sh -c "$DEV_DB_SEED_COMMAND" || echo "Warning: seed command failed." >&2
         fi
     else
         echo "Warning: Could not create the development database '$DEV_DB' — check DB_* settings in .env." >&2
@@ -252,17 +259,20 @@ fi
 if [[ -n "$POST_SETUP_COMMAND" ]]; then
     echo ""
     echo "Running: $POST_SETUP_COMMAND"
-    run_in_runtime bash -c "$POST_SETUP_COMMAND" || echo "Warning: $POST_SETUP_COMMAND failed." >&2
+    run_in_runtime sh -c "$POST_SETUP_COMMAND" || echo "Warning: $POST_SETUP_COMMAND failed." >&2
 fi
 
 # ---------------------------------------------------------------------------
-# 9. Prune merged worktrees
+# 9. Prune merged and idle worktrees
 # ---------------------------------------------------------------------------
-# Without a fetch, so `git worktree add` never waits on the network, and
-# without failing setup.
+# In the background, so `git worktree add` doesn't wait on it, and without
+# a fetch or a prompt. Its output goes to a log in the git dir.
 if [[ "${WORKTREE_PRUNE_ON_SETUP:-true}" == true ]]; then
+    PRUNE_LOG="$COMMON_GIT_DIR/worktree-isolation/prune.log"
+    mkdir -p "${PRUNE_LOG%/*}"
+    nohup bash "$SCRIPT_DIR/worktree-prune" --auto --no-fetch > "$PRUNE_LOG" 2>&1 < /dev/null &
     echo ""
-    bash "$SCRIPT_DIR/worktree-prune" --no-fetch || true
+    echo "Removing merged and idle worktrees in the background (log: $PRUNE_LOG)."
 fi
 
 # ---------------------------------------------------------------------------

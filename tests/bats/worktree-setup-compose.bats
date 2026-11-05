@@ -25,7 +25,7 @@ setup() {
     run grep -c . "$scoped_log"
     [ "$output" -eq 4 ]
 
-    run grep -vc -- "-p myapp-feature-auth" "$scoped_log"
+    run grep -vc -- "-p myapp-feature-auth-c0de" "$scoped_log"
     [ "$output" -eq 0 ]
 
     # up -d must run before the first exec (own-stack-per-worktree, not
@@ -46,27 +46,27 @@ setup() {
     [ "$status" -eq 0 ]
 
     run grep -- "up -d" "$DOCKER_LOG"
-    [[ "$output" == *"-p myapp-feature-auth"* ]]
+    [[ "$output" == *"-p myapp-feature-auth-c0de"* ]]
 }
 
 @test "keeps a compose file path with spaces as a single argument" {
     log_docker_argv
-    echo "WORKTREE_COMPOSE_FILE=\"my compose.yml\"" >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo "WORKTREE_COMPOSE_FILE=\"my compose.yml\"" >> "$MAIN_REPO/.worktree-isolation.env"
     echo '{}' > "$WORKTREE_DIR/package.json"
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
 
-    # up -d, composer install, DB derivation, npm install
+    # config --services, up -d, composer install, DB derivation, npm install
     run grep -cF -- "[-f] [$(pwd -P)/my compose.yml]" "$DOCKER_ARGV_LOG"
-    [ "$output" -eq 4 ]
+    [ "$output" -eq 5 ]
 }
 
 @test "copies env files into a worktree that uses relative gitdir paths, run from a subdirectory" {
     echo "APP_NAME=main" > "$MAIN_REPO/.env"
     relative_dir="$BATS_TEST_TMPDIR/worktrees/relative"
     git -C "$MAIN_REPO" worktree add -q --relative-paths -b relative "$relative_dir"
-    cp "$WORKTREE_DIR/.worktree-isolation.env" "$WORKTREE_DIR/.env.testing" "$relative_dir/"
+    cp "$MAIN_REPO/.worktree-isolation.env" "$WORKTREE_DIR/.env.testing" "$relative_dir/"
     mkdir -p "$relative_dir/app"
     cd "$relative_dir/app"
 
@@ -76,7 +76,6 @@ setup() {
 }
 
 @test "does nothing in the main checkout" {
-    cp "$WORKTREE_DIR/.worktree-isolation.env" "$MAIN_REPO/"
     cd "$MAIN_REPO"
 
     run bash "$STUBS_DIR/worktree-setup"
@@ -107,6 +106,8 @@ setup() {
     echo '{}' > "$WORKTREE_DIR/package.json"
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
+[[ " \$* " != *" compose version "* ]] || echo 2.29.0
+[[ " \$* " != *" config --services"* ]] || echo app
 echo "\$*" >> "$DOCKER_LOG"
 [[ "\$*" != *"npm install"* ]]
 SCRIPT
@@ -117,23 +118,34 @@ SCRIPT
     [[ "$output" == *"Worktree setup complete"* ]]
 }
 
-@test "skips a worktree whose branch has no .worktree-isolation.env" {
-    rm "$WORKTREE_DIR/.worktree-isolation.env"
+@test "skips setup, without failing, when the main checkout has no .worktree-isolation.env" {
+    rm "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"its branch predates worktree-isolation"* ]]
+    [[ "$output" == *".worktree-isolation.env not found in the main checkout"* ]]
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
     [ "$output" = DB_DATABASE=testing ]
     [ ! -s "$DOCKER_LOG" ]
 }
 
+@test "reads the main checkout's config, not the worktree branch's, and exports only WORKTREE_ keys" {
+    printf 'WORKTREE_RUNTIME=native\nWORKTREE_POST_SETUP_COMMAND="touch %s/ran"\n' "$BATS_TEST_TMPDIR" > "$WORKTREE_DIR/.worktree-isolation.env"
+    echo "PATH=/nowhere" >> "$MAIN_REPO/.worktree-isolation.env"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [ ! -e "$BATS_TEST_TMPDIR/ran" ]
+    [[ "$output" == *"Starting Docker Compose stack"* ]]
+}
+
 @test "fails in the main checkout without .worktree-isolation.env" {
+    rm "$MAIN_REPO/.worktree-isolation.env"
     cd "$MAIN_REPO"
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Run vendor/bin/worktree install first"* ]]
+    [[ "$output" == *"Run vendor/bin/worktree install there first"* ]]
 }
 
 @test "checks for the main checkout before the runtime" {
@@ -147,16 +159,49 @@ SCRIPT
     [[ "$output" == *"Nothing to set up"* ]]
 }
 
-@test "checks for merged worktrees at the end, without failing setup" {
-    run bash "$STUBS_DIR/worktree-setup"
-    [ "$status" -eq 0 ]
-    # The fixture has no origin, so the check can only report that.
-    [[ "$output" == *"Could not find origin/master"*"Worktree setup complete"* ]]
+@test "prunes worktrees in the background, logging to the git dir" {
+    sed -i.bak '/WORKTREE_PRUNE_ON_SETUP/d' "$MAIN_REPO/.worktree-isolation.env"
+    log="$MAIN_REPO/.git/worktree-isolation/prune.log"
 
-    echo "WORKTREE_PRUNE_ON_SETUP=false" >> "$WORKTREE_DIR/.worktree-isolation.env"
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
-    [[ "$output" != *"Could not find origin/"* ]]
+    [[ "$output" == *"in the background (log: $log)"*"Worktree setup complete"* ]]
+    # The fixture has no origin, so prune can only report that.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        grep -q "Could not find origin/master" "$log" 2> /dev/null && break
+        sleep 0.5
+    done
+    grep -q "Could not find origin/master" "$log"
+}
+
+@test "doesn't prune with WORKTREE_PRUNE_ON_SETUP=false" {
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"in the background"* ]]
+    [ ! -e "$MAIN_REPO/.git/worktree-isolation/prune.log" ]
+}
+
+@test "drops every service's published ports in the worktree's stack" {
+    touch "$WORKTREE_DIR/compose.yaml"
+    FAKE_COMPOSE_SERVICES=$'app\nmysql\nmailpit'
+    export FAKE_COMPOSE_SERVICES
+    override="$(git rev-parse --path-format=absolute --git-dir)/worktree-isolation.compose.yml"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    run grep -c 'ports: !reset \[\]' "$override"
+    [ "$output" -eq 3 ]
+    run grep -c '^  "mysql":$' "$override"
+    [ "$output" -eq 1 ]
+}
+
+@test "requires Docker Compose 2.24 for a worktree's stack" {
+    FAKE_COMPOSE_VERSION=2.20.3
+    export FAKE_COMPOSE_VERSION
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Docker Compose 2.24+ is required for worktree stacks. You have 2.20.3."* ]]
 }
 
 @test "mounts the main clone's git dir into the worktree's stack through an override file" {
@@ -172,7 +217,7 @@ SCRIPT
     [[ "$output" == *"-f $root/compose.yaml -f $root/compose.override.yaml -f $override up -d"* ]]
     run grep -c -- "-f $override" "$DOCKER_LOG"
     [ "$output" -eq 3 ]
-    [ "$(cat "$override")" = "$(printf 'services:\n  "app":\n    volumes:\n      - type: bind\n        source: "%s"\n        target: "%s"' "$common" "$common")" ]
+    [ "$(cat "$override")" = "$(printf 'services:\n  "app":\n    ports: !reset []\n    volumes:\n      - type: bind\n        source: "%s"\n        target: "%s"' "$common" "$common")" ]
 }
 
 @test "passes git settings to commands in the stack" {
@@ -186,20 +231,22 @@ SCRIPT
 
 @test "runs the post-setup command once, in the worktree's runtime, after the JavaScript install" {
     echo '{}' > "$WORKTREE_DIR/package.json"
-    echo "WORKTREE_POST_SETUP_COMMAND=npm run build" >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo "WORKTREE_POST_SETUP_COMMAND=npm run build" >> "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
 
-    run grep -c -- "-p myapp-feature-auth exec .* -T app bash -c npm run build" "$DOCKER_LOG"
+    run grep -c -- "-p myapp-feature-auth-c0de exec .* -T app sh -c npm run build" "$DOCKER_LOG"
     [ "$output" -eq 1 ]
     [ "$(grep -n -- "npm install" "$DOCKER_LOG" | cut -d: -f1)" -lt "$(grep -n -- "npm run build" "$DOCKER_LOG" | cut -d: -f1)" ]
 }
 
 @test "only warns when the post-setup command fails" {
-    echo "WORKTREE_POST_SETUP_COMMAND=npm run build" >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo "WORKTREE_POST_SETUP_COMMAND=npm run build" >> "$MAIN_REPO/.worktree-isolation.env"
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
+[[ " \$* " != *" compose version "* ]] || echo 2.29.0
+[[ " \$* " != *" config --services"* ]] || echo app
 echo "\$*" >> "$DOCKER_LOG"
 [[ "\$*" != *"npm run build"* ]]
 SCRIPT
@@ -242,4 +289,18 @@ SCRIPT
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
     [[ "$output" != *"git hooks call sail"* ]]
+}
+
+@test "copies WORKTREE_COPY_FILES from the main checkout when they're missing" {
+    echo 'WORKTREE_COPY_FILES="auth.json storage/oauth-private.key missing.txt"' >> "$MAIN_REPO/.worktree-isolation.env"
+    echo '{"main":true}' > "$MAIN_REPO/auth.json"
+    mkdir -p "$MAIN_REPO/storage"
+    echo key > "$MAIN_REPO/storage/oauth-private.key"
+    echo '{"own":true}' > "$WORKTREE_DIR/auth.json"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$WORKTREE_DIR/auth.json")" = '{"own":true}' ]
+    [ "$(cat "$WORKTREE_DIR/storage/oauth-private.key")" = key ]
+    [[ "$output" == *"Warning: missing.txt not found in main repo."* ]]
 }

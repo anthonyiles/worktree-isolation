@@ -7,7 +7,7 @@ load helpers
 
 setup() {
     setup_docker_compose_worktree
-    cat > "$WORKTREE_DIR/.worktree-isolation.env" <<ENV
+    cat > "$MAIN_REPO/.worktree-isolation.env" <<ENV
 WORKTREE_RUNTIME=native
 WORKTREE_TEST_COMMAND="printenv DB_DATABASE"
 ENV
@@ -23,7 +23,7 @@ SCRIPT
 @test "hands the derived database to the test command, ignoring PHP notices" {
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
-    [ "${lines[${#lines[@]}-1]}" = "testing_wt_feature-auth" ]
+    [ "${lines[${#lines[@]}-1]}" = "testing_wt_feature-auth-c0de" ]
 }
 
 @test "does not pass the database name through a shared temp file" {
@@ -44,17 +44,17 @@ SCRIPT
     run bash "$STUBS_DIR/test"
     [ "$status" -ne 0 ]
     [[ "$output" == *"could not find driver"* ]]
-    [[ "$output" == *"could not create the test database testing_wt_feature-auth"* ]]
-    [[ "$output" != *$'\ntesting_wt_feature-auth'* ]]
+    [[ "$output" == *"could not create the test database testing_wt_feature-auth-c0de"* ]]
+    [[ "$output" != *$'\ntesting_wt_feature-auth-c0de'* ]]
 }
 
 @test "names the test database after the main checkout's development database" {
     printf 'DB_CONNECTION=mysql\nDB_DATABASE=myapp\n' > "$MAIN_REPO/.env"
-    echo "DB_DATABASE=myapp_wt_feature-auth" > "$WORKTREE_DIR/.env"
+    echo "DB_DATABASE=myapp_wt_feature-auth-c0de" > "$WORKTREE_DIR/.env"
 
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
-    [ "${lines[${#lines[@]}-1]}" = "myapp_test_wt_feature-auth" ]
+    [ "${lines[${#lines[@]}-1]}" = "myapp_test_wt_feature-auth-c0de" ]
 }
 
 @test "shortens a long development database name to fit the worktree's" {
@@ -62,11 +62,11 @@ SCRIPT
 
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
-    [ "${lines[${#lines[@]}-1]}" = "a_very_long_appl_test_wt_feature-auth" ]
+    [ "${lines[${#lines[@]}-1]}" = "a_very_long_appl_test_wt_featur-69ddb3fd" ]
 }
 
 @test "keeps quoted arguments in the test command together" {
-    echo "WORKTREE_TEST_COMMAND='printf \"[%s]\" \"a b\"'" >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo "WORKTREE_TEST_COMMAND='printf \"[%s]\" \"a b\"'" >> "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/test" "c d"
     [ "$status" -eq 0 ]
@@ -80,7 +80,7 @@ SCRIPT
 
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
-    [ "${lines[${#lines[@]}-1]}" = "myapp_test_wt_feature-auth" ]
+    [ "${lines[${#lines[@]}-1]}" = "myapp_test_wt_feature-auth-c0de" ]
     [ ! -e "$WORKTREE_DIR/.env.testing" ]
 }
 
@@ -94,7 +94,7 @@ SCRIPT
 
 @test "leaves a database alone when phpunit.xml makes the tests use SQLite" {
     echo '<phpunit><php><env name="DB_CONNECTION" value="sqlite"/></php></phpunit>' > "$WORKTREE_DIR/phpunit.xml"
-    echo "WORKTREE_TEST_COMMAND='echo ran'" >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo "WORKTREE_TEST_COMMAND='echo ran'" >> "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]

@@ -1,112 +1,117 @@
 #!/usr/bin/env bats
 #
-# stubs/bin/worktree-clean target selection and connection failures. Port 1
-# refuses connections, so no database server is needed.
+# stubs/bin/worktree-clean: dropping the databases setup and test recorded
+# for worktrees that no longer exist. A fake php answers for the database
+# server, except where the real snippet is run against port 1, which refuses
+# connections.
 
 setup() {
     STUBS_DIR="$(cd "$BATS_TEST_DIRNAME/../../stubs/bin" && pwd)"
-    PROJECT_DIR="$BATS_TEST_TMPDIR/project"
-    mkdir -p "$PROJECT_DIR"
-    git -C "$PROJECT_DIR" init -q
+    export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=test@example.com
+    export GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=test@example.com
 
-    echo "WORKTREE_DEV_DB_PER_WORKTREE=true" > "$PROJECT_DIR/.worktree-isolation.env"
-    printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=myapp\n' > "$PROJECT_DIR/.env"
+    MAIN_REPO="$BATS_TEST_TMPDIR/main"
+    git init -q "$MAIN_REPO"
+    cd "$MAIN_REPO"
+    git commit -q --allow-empty -m init
+    git worktree add -q -b live "$BATS_TEST_TMPDIR/worktrees/live"
+    printf 'WORKTREE_RUNTIME=native\nWORKTREE_DEV_DB_PER_WORKTREE=true\n' > .worktree-isolation.env
+    printf 'DB_CONNECTION=mysql\nDB_HOST=devhost\nDB_DATABASE=myapp\n' > .env
+
+    LEDGER="$MAIN_REPO/.git/worktree-isolation/databases"
+    mkdir -p "$LEDGER"
+    printf 'test\tmyapp_test_wt_gone-c0de\ndevelopment\tmyapp_wt_gone-c0de\n' > "$LEDGER/gone"
+    printf 'test\tmyapp_test_wt_live-c0de\n' > "$LEDGER/live"
+
+    FAKE_BIN="$BATS_TEST_TMPDIR/fakebin"
+    mkdir -p "$FAKE_BIN"
+    PHP_LOG="$BATS_TEST_TMPDIR/php.log"
+    cat > "$FAKE_BIN/php" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$DB_HOST \$DROP_DATABASES" >> "$PHP_LOG"
+for name in \$DROP_DATABASES; do echo "dropped \$name"; done
+SCRIPT
+    chmod +x "$FAKE_BIN/php"
 }
 
-run_clean() {
-    php "$STUBS_DIR/worktree-clean" --project-dir="$PROJECT_DIR" --keep= --force
+clean() {
+    PATH="$FAKE_BIN:$PATH" bash "$STUBS_DIR/worktree-clean" "$@"
 }
 
-@test "skips a SQLite test database and still tries the development one" {
-    printf 'DB_CONNECTION=sqlite\nDB_DATABASE=:memory:\n' > "$PROJECT_DIR/.env.testing"
-
-    run run_clean
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"Could not connect to the development database server"* ]]
-    [[ "$output" != *"test database server"* ]]
+@test "drops only the databases of worktrees that no longer exist" {
+    run clean --force
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Dropped: myapp_test_wt_gone-c0de"*"Dropped: myapp_wt_gone-c0de"* ]]
+    [[ "$output" != *"live"* ]]
+    [ ! -e "$LEDGER/gone" ]
+    [ -e "$LEDGER/live" ]
 }
 
-@test "moves on to the development target when the test server is unreachable" {
-    printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=testing\n' > "$PROJECT_DIR/.env.testing"
+@test "connects with the tests' settings for test databases and .env's for development ones" {
+    printf 'DB_CONNECTION=mysql\nDB_HOST=testhost\n' > .env.testing
 
-    run run_clean
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"Could not connect to the test database server"* ]]
-    [[ "$output" == *"Could not connect to the development database server"* ]]
+    run clean --force
+    [ "$status" -eq 0 ]
+    [ "$(cat "$PHP_LOG")" = "testhost myapp_test_wt_gone-c0de
+devhost myapp_wt_gone-c0de" ]
 }
 
-@test "falls back to the testing env example" {
-    printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=myapp_test\n' > "$PROJECT_DIR/.env.testing.example"
-
-    run run_clean
-    [[ "$output" == *"Could not connect to the test database server at 127.0.0.1:1"* ]]
+@test "--all drops existing worktrees' databases too" {
+    run clean --all --force
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Dropped: myapp_test_wt_live-c0de"* ]]
+    [ ! -e "$LEDGER/live" ]
 }
 
-@test "refuses to run without the databases to keep, unless --all" {
-    run php "$STUBS_DIR/worktree-clean" --project-dir="$PROJECT_DIR" --force
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"--keep is required without --all"* ]]
-    [[ "$output" != *"Could not connect"* ]]
+@test "never drops the main checkout's databases, even if recorded" {
+    printf 'development\tmyapp\n' >> "$LEDGER/gone"
 
-    run php "$STUBS_DIR/worktree-clean" --project-dir="$PROJECT_DIR" --all --force
-    [[ "$output" == *"Could not connect to the development database server"* ]]
+    run clean --force
+    [ "$status" -eq 0 ]
+    [[ "$(cat "$PHP_LOG")" != *" myapp"$'\n'* && "$(cat "$PHP_LOG")" != *" myapp" ]]
+}
+
+@test "asks before dropping" {
+    run bash -c "printf 'n\n' | PATH='$FAKE_BIN:$PATH' bash '$STUBS_DIR/worktree-clean'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Drop these databases? [y/N]"*"Aborted."* ]]
+    [ ! -e "$PHP_LOG" ]
+
+    run bash -c "printf 'y\n' | PATH='$FAKE_BIN:$PATH' bash '$STUBS_DIR/worktree-clean'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Dropped: myapp_wt_gone-c0de"* ]]
+}
+
+@test "says when there's nothing to drop" {
+    rm "$LEDGER/gone"
+
+    run clean --force
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No databases of removed worktrees to drop."* ]]
+    [ ! -e "$PHP_LOG" ]
 }
 
 @test "rejects an unknown option instead of ignoring it" {
-    printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=testing\n' > "$PROJECT_DIR/.env.testing"
-
-    run php "$STUBS_DIR/worktree-clean" --project-dir="$PROJECT_DIR" --keep= --alll --force
+    run clean --alll --force
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Unknown option '--alll'"* ]]
-    [[ "$output" == *"Usage: vendor/bin/worktree clean"* ]]
-    [[ "$output" != *"Could not connect"* ]]
-}
-
-@test "takes --project-dir's value as a separate argument" {
-    run php "$STUBS_DIR/worktree-clean" --project-dir "$PROJECT_DIR" --keep= --force
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"Could not connect to the development database server"* ]]
+    [[ "$output" == *"Unknown option '--alll'"*"Usage: vendor/bin/worktree clean"* ]]
+    [ ! -e "$PHP_LOG" ]
 }
 
 @test "fails without .worktree-isolation.env" {
-    rm "$PROJECT_DIR/.worktree-isolation.env"
+    rm .worktree-isolation.env
 
-    run run_clean
+    run clean --force
     [ "$status" -eq 1 ]
     [[ "$output" == *".worktree-isolation.env not found"* ]]
-    [[ "$output" != *"Could not connect"* ]]
 }
 
-@test "takes database names from the main checkout, not the worktree" {
-    git -C "$PROJECT_DIR" -c user.email=test@example.com -c user.name=Test commit -q --allow-empty -m init
-    worktree="$BATS_TEST_TMPDIR/worktrees/feature"
-    git -C "$PROJECT_DIR" worktree add -q -b feature "$worktree"
-    cp "$PROJECT_DIR/.worktree-isolation.env" "$worktree/"
-    printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=2\nDB_DATABASE=testing_wt_feature\n' > "$worktree/.env.testing"
+@test "keeps a database it couldn't drop recorded, to try again" {
+    printf 'DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=1\nDB_DATABASE=myapp\n' > .env
+    printf 'development\tmyapp_wt_gone-c0de\n' > "$LEDGER/gone"
 
-    run php "$STUBS_DIR/worktree-clean" --project-dir="$worktree" --keep= --force
-    [[ "$output" == *"Could not connect to the test database server at 127.0.0.1:1"* ]]
-    [[ "$output" == *"development database server"* ]]
-    [[ "$output" != *":2"* ]]
-}
-
-@test "cleans test databases without a testing env file" {
-    run run_clean
-    [[ "$output" == *"Could not connect to the test database server at 127.0.0.1:1"* ]]
-    [[ "$output" == *"DB_PASSWORD in phpunit.xml, .env.testing or .env"* ]]
-}
-
-@test "skips the test databases when phpunit.xml makes the tests use SQLite" {
-    echo '<phpunit><php><env name="DB_CONNECTION" value="sqlite"/></php></phpunit>' > "$PROJECT_DIR/phpunit.xml"
-
-    run run_clean
-    [[ "$output" != *"test database server"* ]]
-    [[ "$output" == *"development database server"* ]]
-}
-
-@test "takes test database credentials the testing env file leaves out from .env" {
-    printf 'DB_CONNECTION=mysql\nDB_DATABASE=testing\n' > "$PROJECT_DIR/.env.testing"
-
-    run run_clean
-    [[ "$output" == *"Could not connect to the test database server at 127.0.0.1:1"* ]]
+    run bash "$STUBS_DIR/worktree-clean" --force
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"could not drop the development databases"*"Could not connect to the database server"* ]]
+    [ -s "$LEDGER/gone" ]
 }

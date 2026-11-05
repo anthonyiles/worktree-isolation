@@ -8,7 +8,7 @@ load helpers
 
 setup() {
     setup_docker_compose_worktree
-    cat > "$WORKTREE_DIR/.worktree-isolation.env" <<ENV
+    cat > "$MAIN_REPO/.worktree-isolation.env" <<ENV
 WORKTREE_RUNTIME=docker-image
 WORKTREE_DOCKER_IMAGE=myapp:latest
 ENV
@@ -40,7 +40,7 @@ ENV
 
     output="$(cat "$DOCKER_LOG")"
     [[ "$output" == *"-e APP_ENV=testing"* ]]
-    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth"* ]]
+    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth-c0de"* ]]
 }
 
 @test "passthrough and test run as the host user so the worktree's files stay owned by it" {
@@ -86,6 +86,8 @@ ENV
 fake_docker_run() {
     cat > "$FAKE_BIN/docker" <<'SCRIPT'
 #!/usr/bin/env bash
+[[ " $* " != *" compose version "* ]] || echo 2.29.0
+[[ " $* " != *" config --services"* ]] || echo app
 [[ "$1" == run ]] || exit 0
 shift
 mounts=() workdir= entrypoint=
@@ -115,9 +117,8 @@ SCRIPT
 @test "git works in a worktree added with --relative-paths" {
     relative_dir="$BATS_TEST_TMPDIR/worktrees/relative"
     git -C "$MAIN_REPO" worktree add -q --relative-paths -b relative "$relative_dir"
-    cp "$WORKTREE_DIR/.worktree-isolation.env" "$relative_dir/"
     container="$BATS_TEST_TMPDIR/container"
-    echo "WORKTREE_DOCKER_WORKDIR=$container/var/www/html" >> "$relative_dir/.worktree-isolation.env"
+    echo "WORKTREE_DOCKER_WORKDIR=$container/var/www/html" >> "$MAIN_REPO/.worktree-isolation.env"
     fake_docker_run
     cd "$relative_dir"
 

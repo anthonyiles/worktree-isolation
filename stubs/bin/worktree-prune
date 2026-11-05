@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 #
-# Removes worktrees whose branch is merged, and worktrees whose directory is
-# gone, along with their Compose stacks and databases. Local branches are
-# kept, so `git worktree add <path> <branch>` brings a worktree back.
+# Removes worktrees whose branch is merged or that have been idle for
+# WORKTREE_PRUNE_AFTER days, and worktrees whose directory is gone, along
+# with their Compose stacks and databases. Local branches are kept, so
+# `git worktree add <path> <branch>` brings a worktree back.
 #
 # Invoked as `vendor/bin/worktree prune` (stubs/bin/worktree dispatches
-# straight into this file) and at the end of worktree-setup; not itself
-# exposed as a Composer bin.
+# straight into this file) and, with --auto, in the background at the end of
+# worktree-setup; not itself exposed as a Composer bin.
 #
 # Usage:
 #   vendor/bin/worktree prune
@@ -23,29 +24,34 @@ usage() {
 Usage: vendor/bin/worktree prune [OPTIONS]
 
 Removes worktrees whose branch is merged into origin's default branch (or
-origin/$WORKTREE_PRUNE_BRANCH), and worktrees whose directory is gone, along
-with their Compose stacks and databases. Local branches are kept. The current
-worktree, and worktrees that are locked, detached or have uncommitted or
-untracked changes, are never removed.
-
-WORKTREE_PRUNE in .worktree-isolation.env sets what happens: report (only
-list them), ask (list them and confirm; the default) or remove.
+origin/$WORKTREE_PRUNE_BRANCH) or that have had no git activity for
+WORKTREE_PRUNE_AFTER days (default 7, 0 to never), and worktrees whose
+directory is gone, along with their Compose stacks and databases. Local
+branches are kept. The current worktree, and worktrees that are locked,
+detached or have uncommitted or untracked changes, are never removed.
 
 Options:
-  --dry-run   Only list them, whatever WORKTREE_PRUNE says
+  --dry-run   Only list them
   --force     Remove them without confirmation
   --no-fetch  Use the local origin refs instead of fetching first
+  --auto      Remove them without confirmation, at most once an hour (setup
+              runs this)
   --help      Show this help
 HELP
 }
 
-MODE_OPT=""
+MODE=ask
 FETCH=true
+AUTO=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --dry-run) MODE_OPT=report ;;
-        --force) MODE_OPT=remove ;;
+        --dry-run) MODE=report ;;
+        --force) MODE=remove ;;
         --no-fetch) FETCH=false ;;
+        --auto)
+            AUTO=true
+            MODE=remove
+            ;;
         -h | --help)
             usage
             exit 0
@@ -61,14 +67,21 @@ while [[ $# -gt 0 ]]; do
 done
 
 load_worktree_config
-MODE="${MODE_OPT:-${WORKTREE_PRUNE:-ask}}"
-case "$MODE" in
-    report | ask | remove) ;;
-    *)
-        echo "Error: Unknown WORKTREE_PRUNE '$MODE'. Use: report, ask or remove." >&2
-        exit 1
-        ;;
-esac
+IDLE_DAYS="${WORKTREE_PRUNE_AFTER:-7}"
+if [[ ! "$IDLE_DAYS" =~ ^[0-9]+$ ]]; then
+    echo "Error: WORKTREE_PRUNE_AFTER must be a number of days, not '$IDLE_DAYS'." >&2
+    exit 1
+fi
+
+# Setup runs this for every new worktree; once an hour is plenty.
+if [[ "$AUTO" == true ]]; then
+    STAMP="$COMMON_GIT_DIR/worktree-isolation/last-prune"
+    if [[ -f "$STAMP" && -n "$(find "$STAMP" -mmin -60)" ]]; then
+        exit 0
+    fi
+    mkdir -p "${STAMP%/*}"
+    touch "$STAMP"
+fi
 
 if [[ "$FETCH" == true ]]; then
     git fetch --prune --quiet origin || echo "Warning: git fetch failed; using the local origin refs." >&2
@@ -84,6 +97,7 @@ fi
 # ---------------------------------------------------------------------------
 CURRENT="$(cd -P "$PROJECT_ROOT" && pwd)"
 PATHS=()
+IDS=()
 REASONS=()
 KEPT=()
 
@@ -97,18 +111,26 @@ for ((i = 0; i < ${#WT_PATHS[@]}; i++)); do
             ;;
         prunable)
             PATHS+=("$path")
+            IDS+=("${WT_IDS[i]}")
             REASONS+=("directory is gone")
             continue
             ;;
     esac
     [[ -n "$branch" && "$(cd -P "$path" && pwd)" != "$CURRENT" ]] || continue
-    is_merged "$branch" "$BASE_REF" || continue
+    if is_merged "$branch" "$BASE_REF"; then
+        reason="$branch is merged into $BASE_REF"
+    elif [[ "$IDLE_DAYS" -gt 0 ]] && idle_for "$IDLE_DAYS" "${WT_IDS[i]}"; then
+        reason="no git activity for $IDLE_DAYS days; $branch is kept"
+    else
+        continue
+    fi
     if [[ -n "$(git -C "$path" status --porcelain)" ]]; then
-        KEPT+=("$path ($branch is merged, but the worktree has uncommitted or untracked changes)")
+        KEPT+=("$path ($reason, but the worktree has uncommitted or untracked changes)")
         continue
     fi
     PATHS+=("$path")
-    REASONS+=("$branch is merged into $BASE_REF")
+    IDS+=("${WT_IDS[i]}")
+    REASONS+=("$reason")
 done
 
 for kept in ${KEPT[@]+"${KEPT[@]}"}; do
@@ -116,7 +138,7 @@ for kept in ${KEPT[@]+"${KEPT[@]}"}; do
 done
 
 if [[ ${#PATHS[@]} -eq 0 ]]; then
-    echo "No merged worktrees to remove."
+    echo "No worktrees to remove."
     exit 0
 fi
 
@@ -126,19 +148,13 @@ for ((i = 0; i < ${#PATHS[@]}; i++)); do
 done
 echo ""
 
-# Git hooks don't get the terminal as stdin, so ask on /dev/tty.
-if [[ "$MODE" == ask ]]; then
-    if [[ -t 0 ]]; then
-        TTY=/dev/stdin
-    elif { : < /dev/tty; } 2> /dev/null; then
-        TTY=/dev/tty
-    else
-        MODE=report
-    fi
+# Only ask on a terminal; anywhere else, only list them.
+if [[ "$MODE" == ask && ! -t 0 ]]; then
+    MODE=report
 fi
 if [[ "$MODE" == ask ]]; then
     printf 'Remove these worktrees, their Compose stacks and databases? [y/N] '
-    read -r answer < "$TTY" || answer=""
+    read -r answer || answer=""
     if [[ ! "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]; then
         echo "Aborted."
         exit 0
@@ -155,7 +171,6 @@ fi
 if [[ "$RUNTIME" == docker-compose ]]; then
     validate_runtime
     COMPOSE_BASE="$(compose_project_base)"
-    MAIN_REPO="$(main_checkout_dir)"
 fi
 
 STATUS=0
@@ -163,9 +178,9 @@ REMOVED=0
 for ((i = 0; i < ${#PATHS[@]}; i++)); do
     path="${PATHS[i]}"
     if [[ "$RUNTIME" == docker-compose ]]; then
-        project="$(derive_compose_project_name "$COMPOSE_BASE" "$(basename "$path")")"
+        project="$(derive_compose_project_name "$COMPOSE_BASE" "$(worktree_key "${IDS[i]}")")"
         # Run from the main checkout: the worktree's directory may be gone.
-        if ! (cd "$MAIN_REPO" && docker compose ${WORKTREE_COMPOSE_FILE:+-f "$WORKTREE_COMPOSE_FILE"} -p "$project" down -v --remove-orphans); then
+        if ! (cd "$MAIN_DIR" && docker compose ${WORKTREE_COMPOSE_FILE:+-f "$WORKTREE_COMPOSE_FILE"} -p "$project" down -v --remove-orphans); then
             echo "Error: Could not remove the Compose stack $project, so $path is kept." >&2
             STATUS=1
             continue
@@ -180,11 +195,10 @@ for ((i = 0; i < ${#PATHS[@]}; i++)); do
 done
 git worktree prune
 
-# Drop the removed worktrees' databases. Clean runs from the checkout these
-# scripts belong to: from the post-checkout hook that's the main checkout,
-# whose runtime can run them.
+# Drop the databases recorded for the worktrees that are now gone, through
+# this checkout's runtime.
 if [[ "$REMOVED" -gt 0 ]]; then
     echo ""
-    (cd "$SCRIPT_DIR" && bash ./worktree clean --force) || STATUS=1
+    bash "$SCRIPT_DIR/worktree-clean" --force || STATUS=1
 fi
 exit "$STATUS"

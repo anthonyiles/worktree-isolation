@@ -10,7 +10,7 @@
 # file's own path stays anchored to the main clone instead.
 #
 # post-checkout receives three arguments:
-#   $1 = previous HEAD (0{40} for new worktrees)
+#   $1 = previous HEAD (all zeros for new worktrees)
 #   $2 = new HEAD
 #   $3 = flag: 1 = branch checkout, 0 = file checkout
 #
@@ -24,9 +24,16 @@ if [[ "$FLAG" != "1" ]]; then
     exit 0
 fi
 
-# Detect new worktree: previous HEAD is the null ref (all zeros)
-NULL_REF="0000000000000000000000000000000000000000"
-if [[ "$PREV_HEAD" != "$NULL_REF" ]]; then
+# Detect new worktree: previous HEAD is the null ref (all zeros: 40 of them,
+# or 64 in a SHA-256 repository)
+if [[ ! "$PREV_HEAD" =~ ^0+$ ]]; then
+    exit 0
+fi
+
+# Setup runs the branch's composer and npm scripts, so let the user opt out,
+# e.g. for a branch they don't trust: WORKTREE_SKIP_SETUP=1 git worktree add ...
+if [[ -n "${WORKTREE_SKIP_SETUP:-}" ]]; then
+    echo "[post-checkout] WORKTREE_SKIP_SETUP is set, skipping worktree setup."
     exit 0
 fi
 

@@ -1,343 +1,158 @@
-#!/usr/bin/env php
-<?php
+#!/usr/bin/env bash
+#
+# Drops the per-worktree databases of worktrees that no longer exist. Setup
+# and test record each worktree's databases (see record_database), so only
+# those are ever dropped.
+#
+# Invoked as `vendor/bin/worktree clean` (stubs/bin/worktree dispatches
+# straight into this file) and by worktree-prune; not itself exposed as a
+# Composer bin.
+#
+# Usage:
+#   vendor/bin/worktree clean
+#   vendor/bin/worktree clean --all
+#   vendor/bin/worktree clean --force
+set -euo pipefail
 
-declare(strict_types=1);
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/_worktree-lib.sh"
 
-/**
- * Cleanup script for per-worktree test and development databases. Invoked as
- * `vendor/bin/worktree clean` (stubs/bin/worktree dispatches straight into
- * this file); not itself exposed as a Composer bin.
- *
- * No framework dependencies — uses only PDO.
- * Laravel projects can also use `php artisan worktree:clean` which delegates here.
- *
- * Reads DB credentials from the settings the tests use (test) and .env
- * (development). The databases the existing worktrees use come from
- * vendor/bin/worktree, which lists the worktrees on the host as --keep.
- *
- * Usage:
- *   vendor/bin/worktree clean
- *   vendor/bin/worktree clean --all
- *   vendor/bin/worktree clean --force
- */
+usage() {
+    cat <<'HELP'
+Usage: vendor/bin/worktree clean [OPTIONS]
 
-use WorktreeIsolation\WorktreeDatabaseResolver;
+Drops the test and development databases of worktrees that no longer exist.
+Only databases setup or test created for a worktree are dropped, never the
+main checkout's.
 
-// Loaded directly: this script runs without the package autoloader.
-require_once __DIR__ . '/../../src/WorktreeDatabaseResolver.php';
-
-$opts = parseOptions(array_slice($argv, 1));
-
-if (isset($opts['help'])) {
-    fwrite(STDOUT, usage());
-    exit(0);
+Options:
+  --all     Drop every worktree's databases, existing worktrees' too
+  --force   Drop them without confirmation
+  --help    Show this help
+HELP
 }
 
-$force = isset($opts['force']);
-$all = isset($opts['all']);
-if (! $all && ! isset($opts['keep'])) {
-    fwrite(STDERR, "Error: --keep is required without --all. Run this as vendor/bin/worktree clean.\n");
-    exit(1);
-}
-$projectDir = $opts['project-dir'] ?? resolveProjectRoot();
+ALL=false
+FORCE=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --all) ALL=true ;;
+        --force) FORCE=true ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Error: Unknown option '$1'." >&2
+            echo "" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
 
-$configFile = "$projectDir/.worktree-isolation.env";
-if (! file_exists($configFile)) {
-    fwrite(STDERR, "Error: $configFile not found. Run vendor/bin/worktree install first.\n");
-    exit(1);
-}
-$conf = parseEnvFile($configFile);
+load_worktree_config
+LEDGER="$(database_ledger_dir)"
 
-$mainDir = mainCheckoutDir($projectDir);
-$targets = cleanupTargets($conf, $mainDir);
-$protected = [...protectedDatabases($conf, $mainDir), ...($all ? [] : $opts['keep'])];
+# ---------------------------------------------------------------------------
+# Find the databases to drop
+# ---------------------------------------------------------------------------
+PROTECTED=" $(main_test_database) $(main_dev_database) "
+TEST_NAMES=()
+DEV_NAMES=()
+for file in "$LEDGER"/*; do
+    [[ -f "$file" ]] || continue
+    [[ "$ALL" == true || ! -d "$COMMON_GIT_DIR/worktrees/$(basename "$file")" ]] || continue
+    while IFS=$'\t' read -r kind name; do
+        [[ -n "$name" && "$PROTECTED" != *" $name "* ]] || continue
+        case "$kind" in
+            test) TEST_NAMES+=("$name") ;;
+            development) DEV_NAMES+=("$name") ;;
+        esac
+    done < "$file"
+done
 
-$found = [];
-$exitCode = 0;
-foreach ($targets as $target) {
-    $env = $target['env'];
-    $host = $env['DB_HOST'] ?? '127.0.0.1';
-    $port = (int) ($env['DB_PORT'] ?? 3306);
+if [[ ${#TEST_NAMES[@]} -eq 0 && ${#DEV_NAMES[@]} -eq 0 ]]; then
+    echo "No databases of removed worktrees to drop."
+    exit 0
+fi
 
-    try {
-        $pdo = new PDO("mysql:host=$host;port=$port", $env['DB_USERNAME'] ?? '', $env['DB_PASSWORD'] ?? '', [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-        ]);
-    } catch (PDOException $e) {
-        fwrite(STDERR, "Error: Could not connect to the {$target['label']} database server at $host:$port\n");
-        fwrite(STDERR, "  " . $e->getMessage() . "\n\n");
-        fwrite(STDERR, "  Check DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD in {$target['file']}\n\n");
-        $exitCode = 1;
-        continue;
-    }
+echo "Databases to drop:"
+for name in ${TEST_NAMES[@]+"${TEST_NAMES[@]}"} ${DEV_NAMES[@]+"${DEV_NAMES[@]}"}; do
+    echo "  - $name"
+done
+echo ""
 
-    $stmt = $pdo->prepare('SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?');
-    $stmt->execute([$target['pattern']]);
-    $databases = array_values(array_diff($stmt->fetchAll(PDO::FETCH_COLUMN), $protected, array_column($found, 1)));
+if [[ "$FORCE" != true ]]; then
+    printf 'Drop these databases? [y/N] '
+    read -r answer || answer=""
+    if [[ ! "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+fi
 
-    if (empty($databases)) {
-        $kind = $all ? 'per-worktree' : 'stale per-worktree';
-        echo "No $kind {$target['label']} databases found (pattern: {$target['pattern']}).\n";
-        continue;
-    }
+# ---------------------------------------------------------------------------
+# Drop them
+# ---------------------------------------------------------------------------
+# DB_HOST is often a Compose service name (e.g. "mysql") that only resolves
+# inside the Docker runtime, so the dropping runs there.
+if in_runtime; then
+    RUNTIME=native
+else
+    validate_runtime
+    if [[ "$RUNTIME" == docker-compose ]] && in_main_checkout; then
+        require_compose_service_running
+    fi
+fi
 
-    echo 'Found ' . count($databases) . " per-worktree {$target['label']} database(s):\n";
-    foreach ($databases as $name) {
-        echo "  - $name\n";
-        $found[] = [$pdo, $name];
-    }
-    echo "\n";
-}
-
-if (empty($found)) {
-    exit($exitCode);
-}
-
-if (! $force) {
-    echo 'Drop all of these databases? [y/N] ';
-    $answer = trim(fgets(STDIN) ?: '');
-    if (! in_array(strtolower($answer), ['y', 'yes'], true)) {
-        echo "Aborted.\n";
-        exit($exitCode);
-    }
-}
-
-$dropped = 0;
-foreach ($found as [$pdo, $name]) {
-    if (preg_match('/^[a-z0-9_-]+$/', $name) !== 1) {
-        echo "  Skipping: $name (contains invalid characters)\n";
-        continue;
-    }
-
-    try {
-        $pdo->exec(sprintf('DROP DATABASE `%s`', $name));
-        echo "  Dropped: $name\n";
-        $dropped++;
-    } catch (PDOException $e) {
-        fwrite(STDERR, "  Error dropping $name: " . $e->getMessage() . "\n");
-    }
-}
-
-echo "\nDone. $dropped database(s) removed.\n";
-exit($exitCode);
-
-// ---------------------------------------------------------------------------
-// Functions
-// ---------------------------------------------------------------------------
-
-function usage(): string
-{
-    return <<<'HELP'
-    Usage: vendor/bin/worktree clean [OPTIONS]
-
-    Drops the per-worktree test databases ("{base}_test_wt_*") and
-    development databases ("{base}_wt_*"), both named after .env, whose
-    worktree no longer exists. The main checkout's own databases are never
-    dropped.
-
-    Options:
-      --force            Drop databases without confirmation
-      --all              Drop every per-worktree database, in use or not
-      --project-dir=PATH Project root (default: auto-detected)
-      --help             Show this help
-
-    HELP;
+# Usage: forget_database NAME
+forget_database() {
+    local file
+    for file in "$LEDGER"/*; do
+        [[ -f "$file" ]] || continue
+        awk -F '\t' -v name="$1" '$2 != name' "$file" > "$file.$$"
+        if [[ -s "$file.$$" ]]; then
+            mv "$file.$$" "$file"
+        else
+            rm -f "$file" "$file.$$"
+        fi
+    done
 }
 
-/**
- * Unlike getopt(), rejects anything it doesn't know: a mistyped option
- * must not be ignored by a command that drops databases.
- *
- * @param  list<string>  $args
- * @return array<string, string|true|list<string>>
- */
-function parseOptions(array $args): array
-{
-    $opts = [];
-    while ($args !== []) {
-        $arg = array_shift($args);
-        if (in_array($arg, ['--force', '--all', '--help'], true)) {
-            $opts[substr($arg, 2)] = true;
-        } elseif (str_starts_with($arg, '--keep=')) {
-            $opts['keep'] = array_values(array_filter(explode(',', substr($arg, strlen('--keep=')))));
-        } elseif (str_starts_with($arg, '--project-dir=')) {
-            $opts['project-dir'] = substr($arg, strlen('--project-dir='));
-        } elseif ($arg === '--project-dir') {
-            if ($args === []) {
-                fwrite(STDERR, "Error: --project-dir requires a value.\n");
-                exit(1);
-            }
-            $opts['project-dir'] = array_shift($args);
-        } else {
-            fwrite(STDERR, "Error: Unknown option '$arg'.\n\n" . usage());
-            exit(1);
-        }
-    }
-
-    return $opts;
+# Usage: drop_databases test|development NAME...
+# Connects with the settings the main checkout uses for that kind.
+drop_databases() {
+    local kind="$1" output line status=0
+    shift
+    db_env_args "$kind" "$MAIN_DIR"
+    if ! output="$(run_in_runtime ${DB_ENV[@]+"${DB_ENV[@]}"} -e "DROP_DATABASES=$*" php -r "$DROP_DB_PHP" 2>&1)"; then
+        echo "Error: could not drop the $kind databases." >&2
+        printf '  %s\n' "$output" >&2
+        return 1
+    fi
+    while IFS= read -r line; do
+        case "$line" in
+            "dropped "*)
+                echo "  Dropped: ${line#dropped }"
+                forget_database "${line#dropped }"
+                ;;
+            "failed "*)
+                echo "  Error: ${line#failed }" >&2
+                status=1
+                ;;
+        esac
+    done <<< "$output"
+    return "$status"
 }
 
-function resolveProjectRoot(): string
-{
-    // This script runs from inside vendor/, not the project root —
-    // resolve via git instead.
-    $toplevel = trim((string) shell_exec('git rev-parse --show-toplevel 2>/dev/null'));
-
-    return $toplevel !== '' ? $toplevel : getcwd();
-}
-
-function mainCheckoutDir(string $projectDir): string
-{
-    $commonDir = trim((string) shell_exec(
-        'git -C ' . escapeshellarg($projectDir) . ' rev-parse --path-format=absolute --git-common-dir 2>/dev/null'
-    ));
-
-    return $commonDir !== '' ? dirname($commonDir) : $projectDir;
-}
-
-/**
- * Bases come from the main checkout's env files, which hold the plain names
- * every worktree's are derived from.
- *
- * @param  array<string, string>  $conf
- * @return list<array{label: string, file: string, env: array<string, string>, pattern: string}>
- */
-function cleanupTargets(array $conf, string $mainDir): array
-{
-    $targets = [];
-
-    $testingFile = $conf['WORKTREE_TESTING_ENV_FILE'] ?? '.env.testing';
-    $testingExample = $conf['WORKTREE_TESTING_ENV_EXAMPLE'] ?? '.env.testing.example';
-    $devEnv = parseEnvFile("$mainDir/.env");
-    // The settings the tests see, in the order test_db_setting() reads them.
-    $testEnv = phpunitSettings($mainDir)
-        + (parseEnvFile("$mainDir/$testingFile") ?: parseEnvFile("$mainDir/$testingExample"))
-        + $devEnv;
-    if (isMysqlConnection($testEnv)) {
-        $targets[] = target('test', testDatabaseBase($devEnv), "phpunit.xml, $testingFile or .env", $testEnv);
-    }
-
-    $devEnabled = ($conf['WORKTREE_DEV_DB_PER_WORKTREE'] ?? '') === 'true';
-    $devBase = databaseBase($devEnv);
-    if ($devEnabled && $devBase !== '' && isMysqlConnection($devEnv)) {
-        $targets[] = target('development', $devBase, '.env', $devEnv);
-    }
-
-    return $targets;
-}
-
-/**
- * @param  array<string, string>  $env
- * @return array{label: string, file: string, env: array<string, string>, pattern: string}
- */
-function target(string $label, string $base, string $file, array $env): array
-{
-    return [
-        'label' => $label,
-        'file' => $file,
-        'env' => $env,
-        'pattern' => escapeLike($base . WorktreeDatabaseResolver::MARKER) . '%',
-    ];
-}
-
-/**
- * @param  array<string, string>  $env
- */
-function databaseBase(array $env): string
-{
-    return explode(WorktreeDatabaseResolver::MARKER, $env['DB_DATABASE'] ?? '', 2)[0];
-}
-
-/**
- * @param  array<string, string>  $conf
- * @return list<string>
- */
-function protectedDatabases(array $conf, string $mainDir): array
-{
-    $files = ['.env', $conf['WORKTREE_TESTING_ENV_FILE'] ?? '.env.testing', $conf['WORKTREE_TESTING_ENV_EXAMPLE'] ?? '.env.testing.example'];
-
-    $names = array_map(fn (string $file) => parseEnvFile("$mainDir/$file")['DB_DATABASE'] ?? '', $files);
-    $names[] = phpunitSettings($mainDir)['DB_DATABASE'] ?? '';
-
-    return array_values(array_filter($names));
-}
-
-/**
- * Same as test_database_base() in _worktree-lib.sh: "{name}_test" from the
- * development database's first 16 bytes, else "testing".
- *
- * @param  array<string, string>  $devEnv
- */
-function testDatabaseBase(array $devEnv): string
-{
-    $name = isMysqlConnection($devEnv) ? rtrim(substr(databaseBase($devEnv), 0, 16), '_-') : '';
-
-    return $name !== '' ? "{$name}_test" : 'testing';
-}
-
-/**
- * The values phpunit.xml's (else phpunit.xml.dist's) <env> and <server>
- * elements set, the first for each name, ignoring commented-out ones. Same
- * as phpunit_value() in _worktree-lib.sh.
- *
- * @return array<string, string>
- */
-function phpunitSettings(string $dir): array
-{
-    $file = file_exists("$dir/phpunit.xml") ? "$dir/phpunit.xml" : "$dir/phpunit.xml.dist";
-    if (! file_exists($file)) {
-        return [];
-    }
-
-    $xml = preg_replace('/<!--.*?(-->|$)/s', '', (string) file_get_contents($file)) ?? '';
-    preg_match_all('/<(?:env|server)\s[^>]*>/', $xml, $elements);
-    $settings = [];
-    foreach ($elements[0] as $element) {
-        $name = xmlAttribute($element, 'name');
-        if ($name !== null && ! isset($settings[$name])) {
-            $settings[$name] = xmlAttribute($element, 'value') ?? '';
-        }
-    }
-
-    return $settings;
-}
-
-function xmlAttribute(string $element, string $name): ?string
-{
-    return preg_match('/\s' . $name . '\s*=\s*(["\'])(.*?)\1/s', $element, $m) === 1 ? $m[2] : null;
-}
-
-function isMysqlConnection(array $env): bool
-{
-    return in_array($env['DB_CONNECTION'] ?? '', ['mysql', 'mariadb'], true);
-}
-
-function escapeLike(string $value): string
-{
-    return addcslashes($value, '%_\\');
-}
-
-// Same rules as parse_env_value() in _worktree-lib.sh: optional "export ",
-// a quoted value up to its closing quote, else the value minus a trailing
-// " # comment".
-function parseEnvFile(string $path): array
-{
-    $env = [];
-    if (! file_exists($path)) {
-        return $env;
-    }
-
-    foreach (file($path, FILE_IGNORE_NEW_LINES) as $line) {
-        if (preg_match('/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/', rtrim($line, "\r"), $m) !== 1) {
-            continue;
-        }
-        $value = ltrim($m[2]);
-        if (preg_match('/^(["\'])(.*?)\1/', $value, $quoted) === 1 || preg_match('/^(["\'])(.*)$/', $value, $quoted) === 1) {
-            $env[$m[1]] = $quoted[2];
-        } else {
-            $env[$m[1]] = rtrim(preg_replace('/\s#.*$/', '', $value) ?? '');
-        }
-    }
-
-    return $env;
-}
+STATUS=0
+if [[ ${#TEST_NAMES[@]} -gt 0 ]]; then
+    drop_databases test "${TEST_NAMES[@]}" || STATUS=1
+fi
+if [[ ${#DEV_NAMES[@]} -gt 0 ]]; then
+    drop_databases development "${DEV_NAMES[@]}" || STATUS=1
+fi
+exit "$STATUS"

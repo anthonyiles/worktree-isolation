@@ -31,8 +31,6 @@ jobs:
           php-version: '8.2'
           coverage: none
 
-      - run: composer install --no-interaction --prefer-dist
-
       - run: brew install bats-core git
 
       - name: Put Bash 3.2 first on PATH

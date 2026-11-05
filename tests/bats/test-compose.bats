@@ -17,7 +17,7 @@ setup() {
     # project scope and legitimately carries no -p — only the exec call
     # (running the test command) matters here.
     run grep -- " exec " "$DOCKER_LOG"
-    [[ "$output" == *"-p myapp-feature-auth"* ]]
+    [[ "$output" == *"-p myapp-feature-auth-c0de"* ]]
 }
 
 @test "threads -p through the plain (no per-worktree database) branch" {
@@ -27,12 +27,12 @@ setup() {
     [ "$status" -eq 0 ]
 
     run grep -- " exec " "$DOCKER_LOG"
-    [[ "$output" == *"-p myapp-feature-auth"* ]]
+    [[ "$output" == *"-p myapp-feature-auth-c0de"* ]]
 }
 
 @test "keeps a compose file path with spaces as a single argument" {
     log_docker_argv
-    echo "WORKTREE_COMPOSE_FILE=\"my compose.yml\"" >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo "WORKTREE_COMPOSE_FILE=\"my compose.yml\"" >> "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]

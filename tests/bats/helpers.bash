@@ -33,7 +33,10 @@ SCRIPT
 #!/usr/bin/env bash
 "$FAKE_BIN/docker-args" "\$@" >> "$DOCKER_LOG"
 [[ " \$* " != *" ps --status running "* ]] || echo "\${FAKE_RUNNING_SERVICES-app}"
-if [[ " \$* " == *" compose "*"config "* ]]; then
+[[ " \$* " != *" compose version "* ]] || echo "\${FAKE_COMPOSE_VERSION-2.29.0}"
+if [[ " \$* " == *" config --services"* ]]; then
+    echo "\${FAKE_COMPOSE_SERVICES-app}"
+elif [[ " \$* " == *" compose "*"config "* ]]; then
     [[ -z "\${FAKE_COMPOSE_CONFIG_FAILS:-}" ]] || exit 1
     cat "\${FAKE_COMPOSE_CONFIG:-/dev/null}"
 fi
@@ -52,12 +55,16 @@ SCRIPT
     WORKTREE_DIR="$BATS_TEST_TMPDIR/worktrees/feature-auth"
     mkdir -p "$(dirname "$WORKTREE_DIR")"
     git -C "$MAIN_REPO" worktree add -q -b feature-auth "$WORKTREE_DIR"
+    # A fixed clone id, so the derived names are predictable.
+    fix_clone_id "$MAIN_REPO"
 
-    cat > "$WORKTREE_DIR/.worktree-isolation.env" <<ENV
+    # Every checkout reads the main checkout's config.
+    cat > "$MAIN_REPO/.worktree-isolation.env" <<ENV
 WORKTREE_RUNTIME=docker-compose
 WORKTREE_COMPOSE_SERVICE=app
 WORKTREE_COMPOSE_PROJECT_BASE=myapp
 WORKTREE_DB_WAIT_SECONDS=0
+WORKTREE_PRUNE_ON_SETUP=false
 ENV
 
     cat > "$WORKTREE_DIR/.env.testing" <<ENV
@@ -80,7 +87,10 @@ log_docker_argv() {
 #!/usr/bin/env bash
 "$FAKE_BIN/docker-args" "\$@" >> "$DOCKER_LOG"
 [[ " \$* " != *" ps --status running "* ]] || echo "\${FAKE_RUNNING_SERVICES-app}"
-if [[ " \$* " == *" compose "*"config "* ]]; then
+[[ " \$* " != *" compose version "* ]] || echo "\${FAKE_COMPOSE_VERSION-2.29.0}"
+if [[ " \$* " == *" config --services"* ]]; then
+    echo "\${FAKE_COMPOSE_SERVICES-app}"
+elif [[ " \$* " == *" compose "*"config "* ]]; then
     [[ -z "\${FAKE_COMPOSE_CONFIG_FAILS:-}" ]] || exit 1
     cat "\${FAKE_COMPOSE_CONFIG:-/dev/null}"
 fi
@@ -90,10 +100,16 @@ exit 0
 SCRIPT
 }
 
-# Moves the worktree's config into the main checkout and works from there.
+# Works from the main checkout.
 use_main_checkout() {
-    cp "$WORKTREE_DIR/.worktree-isolation.env" "$MAIN_REPO/"
     cd "$MAIN_REPO" || return 1
+}
+
+# Usage: fix_clone_id REPO
+# Names then end in "-c0de" (see worktree_key).
+fix_clone_id() {
+    mkdir -p "$1/.git/worktree-isolation"
+    echo c0de > "$1/.git/worktree-isolation/clone-id"
 }
 
 # A fake `php` that logs where it ran and with what, for commands run directly

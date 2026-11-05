@@ -53,8 +53,8 @@ A post-checkout hook bootstraps the new worktree automatically: dependencies, en
 files and per-worktree databases. Don't copy `.env` files or run `composer install`
 yourself.
 
-Setup may list merged worktrees it could remove. Leave them: don't run
-`vendor/bin/worktree prune` unless asked, since other worktrees may be in use.
+Setup removes merged and long-idle worktrees on its own, in the background. Don't run
+`vendor/bin/worktree prune` or `clean` unless asked, since other worktrees may be in use.
 
 ## When something looks wrong
 
