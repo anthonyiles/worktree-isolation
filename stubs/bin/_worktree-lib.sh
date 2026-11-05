@@ -1,28 +1,48 @@
 #!/usr/bin/env bash
 #
-# Shared helpers sourced by stubs/bin/worktree, worktree-install,
-# worktree-setup, and test.
+# Shared helpers sourced by the scripts in stubs/bin.
+#
+# Logic lives here, in bash. PHP is only used to reach the database server,
+# inside the runtime, through the short snippets below.
+
+# Absolute paths for the current checkout, worked out once: TOPLEVEL,
+# CHECKOUT_GIT_DIR, COMMON_GIT_DIR (the main clone's .git) and MAIN_DIR (the
+# main checkout).
+# shellcheck disable=SC2034 # the variables are read by the sourcing scripts
+load_git_paths() {
+    [[ -z "${COMMON_GIT_DIR:-}" ]] || return 0
+    local paths
+    paths="$(git rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir)" || exit 1
+    TOPLEVEL="${paths%%$'\n'*}"
+    paths="${paths#*$'\n'}"
+    CHECKOUT_GIT_DIR="${paths%%$'\n'*}"
+    COMMON_GIT_DIR="${paths#*$'\n'}"
+    MAIN_DIR="$(dirname "$COMMON_GIT_DIR")"
+}
 
 # Usage: load_worktree_config [--skip-if-missing]
-# Exits when .worktree-isolation.env is missing rather than guessing at
-# defaults. In a worktree that means its branch predates worktree-isolation;
-# --skip-if-missing exits 0 there, so setup doesn't fail `git worktree add`.
+# Reads the main checkout's .worktree-isolation.env, whichever checkout this
+# is: a new worktree's branch doesn't get to choose the commands setup runs.
+# Only WORKTREE_* keys are exported. Exits when the file is missing;
+# --skip-if-missing exits 0 instead in a worktree, so the hook doesn't fail
+# `git worktree add`.
 # shellcheck disable=SC2034 # the variables are read by the sourcing scripts
 load_worktree_config() {
-    # The scripts live in vendor/, so resolve the project root via git.
-    PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-    WORKTREE_BASENAME="$(basename "$PROJECT_ROOT")"
+    load_git_paths
+    PROJECT_ROOT="$TOPLEVEL"
 
-    if [[ ! -f "$PROJECT_ROOT/.worktree-isolation.env" ]]; then
-        if in_main_checkout; then
-            echo "Error: .worktree-isolation.env not found. Run vendor/bin/worktree install first." >&2
-            exit 1
+    if [[ ! -f "$MAIN_DIR/.worktree-isolation.env" ]]; then
+        echo "Error: .worktree-isolation.env not found in the main checkout ($MAIN_DIR). Run vendor/bin/worktree install there first." >&2
+        if [[ "${1:-}" == --skip-if-missing ]] && ! in_main_checkout; then
+            exit 0
         fi
-        echo "No .worktree-isolation.env in this worktree: its branch predates worktree-isolation." >&2
-        [[ "${1:-}" == --skip-if-missing ]] && exit 0
         exit 1
     fi
-    load_env_file "$PROJECT_ROOT/.worktree-isolation.env"
+    load_env_file "$MAIN_DIR/.worktree-isolation.env" WORKTREE_
+
+    # Names this worktree's databases and Compose stack.
+    WORKTREE_KEY=""
+    in_main_checkout || WORKTREE_KEY="$(worktree_key "$(basename "$CHECKOUT_GIT_DIR")")"
 
     RUNTIME="${WORKTREE_RUNTIME:-native}"
     TESTING_ENV_FILE="${WORKTREE_TESTING_ENV_FILE:-.env.testing}"
@@ -43,7 +63,27 @@ load_worktree_config() {
 }
 
 in_main_checkout() {
-    [[ "$(git rev-parse --path-format=absolute --git-dir)" == "$(git rev-parse --path-format=absolute --git-common-dir)" ]]
+    load_git_paths
+    [[ "$CHECKOUT_GIT_DIR" == "$COMMON_GIT_DIR" ]]
+}
+
+# Usage: worktree_key ID
+# A worktree's databases and Compose stack are named after its git admin dir
+# (.git/worktrees/<ID>), which git keeps unique within the clone, and this
+# clone's id, so two clones sharing a database server don't collide.
+worktree_key() {
+    echo "$1-$(clone_id)"
+}
+
+# A random id for this clone, created on first use.
+clone_id() {
+    local file="$COMMON_GIT_DIR/worktree-isolation/clone-id"
+    if [[ ! -s "$file" ]]; then
+        mkdir -p "${file%/*}"
+        od -An -N2 -tx1 /dev/urandom | tr -d ' \n' > "$file.$$"
+        mv "$file.$$" "$file"
+    fi
+    head -n 1 "$file"
 }
 
 # Usage: require_worktree [hint]
@@ -55,11 +95,10 @@ require_worktree() {
     fi
 }
 
-# Already inside the runtime (e.g. a hook run in Sail, or
-# `sail artisan worktree:clean`): there's no docker to reach it with, and no
-# need to.
+# Already inside the runtime: Sail's container, or one this package started
+# (see CONTAINER_ENV). There's no docker to reach it with, and no need to.
 in_runtime() {
-    [[ "${LARAVEL_SAIL:-}" == 1 ]] || ! command -v docker > /dev/null 2>&1
+    [[ "${LARAVEL_SAIL:-}" == 1 || "${WORKTREE_IN_RUNTIME:-}" == 1 ]]
 }
 
 # The main checkout's stack is the user's own: commands go into it, but it's
@@ -71,31 +110,57 @@ require_compose_service_running() {
     fi
 }
 
+# Usage: version_at_least VERSION MAJOR MINOR
+version_at_least() {
+    local major=0 minor=0
+    if [[ "$1" =~ ([0-9]+)\.([0-9]+) ]]; then
+        major="${BASH_REMATCH[1]}"
+        minor="${BASH_REMATCH[2]}"
+    fi
+    (( 10#$major > $2 || (10#$major == $2 && 10#$minor >= $3) ))
+}
+
 validate_runtime() {
     case "$RUNTIME" in
         native)
             ;;
         docker-compose)
-            if ! docker compose version > /dev/null 2>&1; then
+            local version
+            if ! version="$(docker compose version --short 2> /dev/null)"; then
                 echo "Error: 'docker compose' not found. Install Docker with the Compose plugin." >&2
                 exit 1
             fi
             COMPOSE_ARGS=(docker compose)
             # The main checkout's stack runs under Compose's default project name.
             if ! in_main_checkout; then
-                COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$(compose_project_base)" "$WORKTREE_BASENAME")"
+                # The worktree's override file uses !reset.
+                if ! version_at_least "$version" 2 24; then
+                    echo "Error: Docker Compose 2.24+ is required for worktree stacks. You have ${version:-an unknown version}." >&2
+                    exit 1
+                fi
+                COMPOSE_PROJECT_NAME="$(derive_compose_project_name "$(compose_project_base)" "$WORKTREE_KEY")"
                 COMPOSE_ARGS+=(-p "$COMPOSE_PROJECT_NAME")
-                add_compose_git_override
+                find_compose_files "$PROJECT_ROOT"
+                local file
+                for file in ${COMPOSE_FILES[@]+"${COMPOSE_FILES[@]}"}; do
+                    COMPOSE_ARGS+=(-f "$file")
+                done
+                COMPOSE_BASE_ARGS=("${COMPOSE_ARGS[@]}")
+                [[ ! -f "$(compose_override_file)" ]] || COMPOSE_ARGS+=(-f "$(compose_override_file)")
             elif [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
                 COMPOSE_ARGS+=(-f "$WORKTREE_COMPOSE_FILE")
             fi
-            COMPOSE_EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec "${CONTAINER_USER_ARGS[@]}" "${CONTAINER_GIT_ENV[@]}")
+            COMPOSE_EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec "${CONTAINER_USER_ARGS[@]}" "${CONTAINER_ENV[@]}")
             # Sail's compose file builds and serves as these, as vendor/bin/sail sets them.
             export WWWUSER="${WWWUSER:-$(id -u)}" WWWGROUP="${WWWGROUP:-$(id -g)}"
             ;;
         docker-image)
             if [[ -z "$IMAGE" ]]; then
                 echo "Error: WORKTREE_DOCKER_IMAGE must be set for the docker-image runtime." >&2
+                exit 1
+            fi
+            if ! command -v docker > /dev/null 2>&1; then
+                echo "Error: 'docker' not found. Install Docker, or run this inside the container." >&2
                 exit 1
             fi
             if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
@@ -120,42 +185,64 @@ validate_runtime() {
     esac
 }
 
-# A worktree's stack also mounts the main clone's git dir (see
-# container_git_dir), through an override file kept in the worktree's own git
-# dir, out of the working tree. Passing -f stops Compose finding its default
-# files, so those are passed too. With a relative gitdir pointer, whose
-# target depends on the service's own mounts, nothing is added.
-add_compose_git_override() {
-    local files=() file git_dir override value
+# Usage: find_compose_files DIR
+# Fills COMPOSE_FILES with the absolute paths of the compose files Compose
+# would use in DIR: WORKTREE_COMPOSE_FILE, else COMPOSE_FILE (from the
+# environment or DIR/.env), else the first default file and its override.
+find_compose_files() {
+    local dir="$1" file value i
+    COMPOSE_FILES=()
+    value="${COMPOSE_FILE:-$(env_file_value "$dir/.env" COMPOSE_FILE)}"
     if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
-        files=("$WORKTREE_COMPOSE_FILE")
+        COMPOSE_FILES=("$WORKTREE_COMPOSE_FILE")
+    elif [[ -n "$value" ]]; then
+        IFS="${COMPOSE_PATH_SEPARATOR:-:}" read -ra COMPOSE_FILES <<< "$value"
     else
-        value="${COMPOSE_FILE:-$(env_file_value "$PROJECT_ROOT/.env" COMPOSE_FILE)}"
-        if [[ -n "$value" ]]; then
-            IFS="${COMPOSE_PATH_SEPARATOR:-:}" read -ra files <<< "$value"
-        else
-            for file in compose.yaml compose.yml docker-compose.yml docker-compose.yaml; do
-                [[ -f "$PROJECT_ROOT/$file" ]] && files=("$file") && break
-            done
-            for file in compose.override.yml compose.override.yaml docker-compose.override.yml docker-compose.override.yaml; do
-                [[ ${#files[@]} -gt 0 && -f "$PROJECT_ROOT/$file" ]] && files+=("$file") && break
-            done
-        fi
+        for file in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+            [[ -f "$dir/$file" ]] && COMPOSE_FILES=("$file") && break
+        done
+        for file in compose.override.yaml compose.override.yml docker-compose.override.yaml docker-compose.override.yml; do
+            [[ ${#COMPOSE_FILES[@]} -gt 0 && -f "$dir/$file" ]] && COMPOSE_FILES+=("$file") && break
+        done
     fi
-
-    for file in ${files[@]+"${files[@]}"}; do
-        [[ "$file" == /* ]] || file="$PROJECT_ROOT/$file"
-        COMPOSE_ARGS+=(-f "$file")
+    for ((i = 0; i < ${#COMPOSE_FILES[@]}; i++)); do
+        [[ "${COMPOSE_FILES[i]}" == /* ]] || COMPOSE_FILES[i]="$dir/${COMPOSE_FILES[i]}"
     done
-    git_dir="$(container_git_dir)"
-    [[ ${#files[@]} -gt 0 && -n "$git_dir" ]] || return 0
+}
 
-    override="$(git rev-parse --path-format=absolute --git-dir)/worktree-isolation.compose.yml"
-    printf 'services:\n  %s:\n    volumes:\n      - type: bind\n        source: %s\n        target: %s\n' \
-        "$(yaml_string "$COMPOSE_SERVICE")" \
-        "$(yaml_string "$(git rev-parse --path-format=absolute --git-common-dir)")" \
-        "$(yaml_string "$git_dir")" > "$override"
+# Kept in the worktree's own git dir, out of the working tree.
+compose_override_file() {
+    echo "$CHECKOUT_GIT_DIR/worktree-isolation.compose.yml"
+}
+
+# Setup writes a worktree stack's override file before starting it. It drops
+# every service's published ports, so stacks don't clash over host ports
+# (commands reach them through exec, not ports), and mounts the main clone's
+# git dir where the worktree's .git pointer resolves (see container_git_dir).
+# With a relative pointer, whose target depends on the service's own mounts,
+# no git dir is mounted.
+write_compose_override() {
+    local override services service git_dir
+    override="$(compose_override_file)"
+    rm -f "$override"
+    COMPOSE_ARGS=("${COMPOSE_BASE_ARGS[@]}")
+    [[ ${#COMPOSE_FILES[@]} -gt 0 ]] || return 0
+    services="$("${COMPOSE_ARGS[@]}" config --services)" || return 1
+    git_dir="$(container_git_dir)"
+
+    {
+        echo 'services:'
+        while IFS= read -r service; do
+            [[ -n "$service" ]] || continue
+            printf '  %s:\n    ports: !reset []\n' "$(yaml_string "$service")"
+            if [[ "$service" == "$COMPOSE_SERVICE" && -n "$git_dir" ]]; then
+                printf '    volumes:\n      - type: bind\n        source: %s\n        target: %s\n' \
+                    "$(yaml_string "$COMMON_GIT_DIR")" "$(yaml_string "$git_dir")"
+            fi
+        done <<< "$services"
+    } > "$override"
     COMPOSE_ARGS+=(-f "$override")
+    COMPOSE_EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec "${CONTAINER_USER_ARGS[@]}" "${CONTAINER_ENV[@]}")
 }
 
 # Double-quotes a YAML string, escaping $ from Compose's interpolation too.
@@ -166,7 +253,8 @@ yaml_string() {
 }
 
 main_checkout_dir() {
-    dirname "$(git rev-parse --path-format=absolute --git-common-dir)"
+    load_git_paths
+    echo "$MAIN_DIR"
 }
 
 # The main checkout's own database names. Worktrees derive theirs from these
@@ -184,8 +272,7 @@ main_test_database() {
 # Worktrees' test databases are named after the main checkout's development
 # database, "{name}_test_wt_{worktree}", so no testing env file is needed.
 # The name is cut to 16 bytes to leave the worktree room within 40. Falls
-# back to "testing" when .env has no MySQL/MariaDB database. Matches
-# testDatabaseBase() in worktree-clean.
+# back to "testing" when .env has no MySQL/MariaDB database.
 test_database_base() {
     local LC_ALL=C env name=""
     env="$(main_checkout_dir)/.env"
@@ -213,7 +300,7 @@ tests_use_mysql() {
 # KEY as DIR's tests see it: phpunit.xml (else phpunit.xml.dist), then the
 # testing env file, then .env, which Laravel loads when there's no testing
 # env file. Fails when none sets it, so callers don't pass a blank that
-# would override .env. Matches testSetting() in worktree-clean.
+# would override .env.
 test_db_setting() {
     local file
     phpunit_value "$1" "$2" && return
@@ -224,6 +311,28 @@ test_db_setting() {
         fi
     done
     return 1
+}
+
+# The connection settings passed to the database snippets.
+DB_SETTING_KEYS=(DB_HOST DB_PORT DB_SOCKET DB_USERNAME DB_PASSWORD DB_CHARSET DB_COLLATION MYSQL_ATTR_SSL_CA)
+
+# Usage: db_env_args test|development DIR
+# Fills DB_ENV with "-e KEY=value" for the connection settings a kind of
+# database uses in DIR's checkout: the tests' (see test_db_setting), or
+# .env's. Settings no file has are left out.
+db_env_args() {
+    local key value keys
+    DB_ENV=()
+    keys=$'\n'"$(env_file_keys "$2/.env")"$'\n'
+    for key in "${DB_SETTING_KEYS[@]}"; do
+        if [[ "$1" == test ]]; then
+            value="$(test_db_setting "$2" "$key")" || continue
+        else
+            [[ "$keys" == *$'\n'"$key"$'\n'* ]] || continue
+            value="$(env_file_value "$2/.env" "$key")"
+        fi
+        DB_ENV+=(-e "$key=$value")
+    done
 }
 
 # Warns when phpunit.xml's DB_DATABASE beats the per-worktree one, which
@@ -265,7 +374,24 @@ phpunit_value() {
 # Prints the first <env> or <server> element setting NAME in a phpunit.xml,
 # on one line, ignoring commented-out ones.
 phpunit_variable() {
-    local content rest element pattern='<(env|server)[[:space:]][^>]*>'
+    local element elements
+    if [[ -n "${PHPUNIT_CACHE_FILE:-}" && "$PHPUNIT_CACHE_FILE" == "$1" ]]; then
+        elements="$PHPUNIT_CACHE"
+    else
+        elements="$(phpunit_elements "$1")"
+    fi
+    while IFS= read -r element; do
+        if [[ "$element" =~ [[:space:]]name[[:space:]]*=[[:space:]]*[\"\']"$2"[\"\'] ]]; then
+            echo "$element"
+            return
+        fi
+    done <<< "$elements"
+}
+
+# Prints a phpunit.xml's <env> and <server> elements, one per line, leaving
+# out commented-out ones.
+phpunit_elements() {
+    local content rest pattern='<(env|server)[[:space:]][^>]*>'
     content="$(tr '\r\n\t' '   ' < "$1")"
     while [[ "$content" == *'<!--'* ]]; do
         rest="${content#*<!--}"
@@ -273,13 +399,18 @@ phpunit_variable() {
         [[ "$rest" != *'-->'* ]] || content+="${rest#*-->}"
     done
     while [[ "$content" =~ $pattern ]]; do
-        element="${BASH_REMATCH[0]}"
-        if [[ "$(xml_attribute "$element" name)" == "$2" ]]; then
-            echo "$element"
-            return
-        fi
-        content="${content#*"$element"}"
+        echo "${BASH_REMATCH[0]}"
+        content="${content#*"${BASH_REMATCH[0]}"}"
     done
+}
+
+# Usage: cache_phpunit DIR
+# Reads DIR's phpunit.xml once for the phpunit_* calls that follow, in this
+# shell and its subshells.
+cache_phpunit() {
+    PHPUNIT_CACHE_FILE="$(phpunit_file "$1")" || PHPUNIT_CACHE_FILE=""
+    PHPUNIT_CACHE=""
+    [[ -z "$PHPUNIT_CACHE_FILE" ]] || PHPUNIT_CACHE="$(phpunit_elements "$PHPUNIT_CACHE_FILE")"
 }
 
 xml_attribute() {
@@ -353,15 +484,17 @@ derive_test_database_name() {
     derive_worktree_database_name "$base" "$2" 40
 }
 
-# Fills WT_PATHS, WT_BRANCHES and WT_STATES from `git worktree list`, one
-# entry per linked worktree (the main checkout is left out). A branch is
-# empty for a detached HEAD; a state is "locked", "prunable" (its directory
-# is gone) or empty.
+# Fills WT_PATHS, WT_IDS, WT_BRANCHES and WT_STATES from `git worktree list`,
+# one entry per linked worktree (the main checkout is left out). An id is the
+# worktree's git admin dir name (see worktree_key). A branch is empty for a
+# detached HEAD; a state is "locked", "prunable" (its directory is gone) or
+# empty.
 # shellcheck disable=SC2034 # the arrays are read by the callers
 load_worktree_list() {
     local list line i=-1
     list="$(git worktree list --porcelain)"
     WT_PATHS=()
+    WT_IDS=()
     WT_BRANCHES=()
     WT_STATES=()
     while IFS= read -r line; do
@@ -369,6 +502,7 @@ load_worktree_list() {
             "worktree "*)
                 i=$((i + 1))
                 WT_PATHS[i]="${line#worktree }"
+                WT_IDS[i]="$(worktree_id "${WT_PATHS[i]}")"
                 WT_BRANCHES[i]=""
                 WT_STATES[i]=""
                 ;;
@@ -384,29 +518,37 @@ load_worktree_list() {
         esac
     done <<< "$list"
     WT_PATHS=("${WT_PATHS[@]:1}")
+    WT_IDS=("${WT_IDS[@]:1}")
     WT_BRANCHES=("${WT_BRANCHES[@]:1}")
     WT_STATES=("${WT_STATES[@]:1}")
 }
 
-# The databases the linked worktrees use, comma-separated, for clean to keep.
-# A worktree whose directory is gone still counts until `git worktree prune`
-# drops it: inside a container, git can't see the host's worktree
-# directories and would report every one as gone.
-in_use_databases() {
-    local test_base dev_base i name db names=""
-    test_base="$(test_database_base)"
-    dev_base="$(main_dev_database)"
-    load_worktree_list
-    for ((i = 0; i < ${#WT_PATHS[@]}; i++)); do
-        name="$(basename "${WT_PATHS[i]}")"
-        if db="$(derive_test_database_name "$test_base" "$name")"; then
-            names+=",$db"
-        fi
-        if [[ -n "$dev_base" ]] && db="$(derive_dev_database_name "$dev_base" "$name")"; then
-            names+=",$db"
+# Usage: worktree_id PATH
+# The admin dir (.git/worktrees/<id>) whose gitdir file points at PATH/.git.
+# Works when PATH is gone, too.
+worktree_id() {
+    local admin target
+    load_git_paths
+    for admin in "$COMMON_GIT_DIR"/worktrees/*; do
+        [[ -f "$admin/gitdir" ]] || continue
+        target="$(head -n 1 "$admin/gitdir")"
+        [[ "$target" == /* ]] || target="$(normalize_path "$admin/$target")"
+        if [[ "$target" == "$1/.git" ]]; then
+            basename "$admin"
+            return
         fi
     done
-    echo "${names#,}"
+    basename "$1"
+}
+
+# Usage: idle_for DAYS ID
+# Whether a worktree has seen no git activity (checkout, commit, staging) for
+# DAYS days.
+idle_for() {
+    local admin="$COMMON_GIT_DIR/worktrees/$2" file
+    for file in "$admin/HEAD" "$admin/index" "$admin/logs/HEAD"; do
+        [[ ! -e "$file" ]] || [[ -z "$(find "$file" -prune -mmin "-$(($1 * 1440))")" ]] || return 1
+    done
 }
 
 # The ref worktree branches are merged into: origin/$WORKTREE_PRUNE_BRANCH,
@@ -428,54 +570,120 @@ prune_base_ref() {
 # squash- or rebase-merged, which leaves a commit in REF with the same
 # change as the whole branch.
 is_merged() {
-    local branch="$1" ref="$2" base tmp
+    local branch="$1" ref="$2" base since id
     if git merge-base --is-ancestor "$branch" "$ref"; then
         ! is_unused_branch "$branch" "$ref"
         return
     fi
     base="$(git merge-base "$ref" "$branch")" || return 1
-    tmp="$(GIT_AUTHOR_NAME=worktree GIT_AUTHOR_EMAIL=worktree@localhost \
-        GIT_COMMITTER_NAME=worktree GIT_COMMITTER_EMAIL=worktree@localhost \
-        git commit-tree "$branch^{tree}" -p "$base" -m squashed)" || return 1
-    [[ "$(git cherry "$ref" "$tmp")" == -* ]]
+    id="$(git diff "$base" "$branch" | git patch-id --stable | cut -d' ' -f1)"
+    [[ -n "$id" ]] || return 1
+    # A squash merge lands after the branch's last commit, so only REF's
+    # newer commits are compared (with a day's margin for clock skew). grep
+    # reads all of its input, so pipefail sees no SIGPIPE.
+    since=$(( $(git log -1 --format=%ct "$branch") - 86400 ))
+    git log -p --no-merges --since="@$since" "$base..$ref" | git patch-id --stable | cut -d' ' -f1 |
+        grep -xF "$id" > /dev/null
 }
 
 # A branch nobody has committed to is also an ancestor of REF, but isn't
 # finished. It still points where it was created (a single reflog entry), at
 # a commit on REF's own line rather than one merged in from a branch. The
-# grep reads all of rev-list's output, so pipefail sees no SIGPIPE.
+# walk stops at the branch's parents, so it doesn't cover REF's whole history.
 is_unused_branch() {
-    (( $(git reflog show "refs/heads/$1" -- 2> /dev/null | wc -l) <= 1 )) &&
-        git rev-list --first-parent "$2" | grep -xF "$(git rev-parse "$1")" > /dev/null
+    local tip
+    (( $(git reflog show "refs/heads/$1" -- 2> /dev/null | wc -l) <= 1 )) || return 1
+    tip="$(git rev-parse "$1")"
+    # shellcheck disable=SC2046 # one argument per parent
+    git rev-list --first-parent "$2" --not $(git rev-parse "$1^@") | grep -xF "$tip" > /dev/null
 }
 
-# Creates the per-worktree database named by DB_DATABASE, which bash already
-# derived. Refuses anything that isn't a per-worktree name or is the main
-# checkout's. Runs from the project root with DB_* and MAIN_DB_DATABASE in
-# its environment, and prints "<name> created|existing" as its last line; the
-# leading newline keeps that line intact if PHP emitted a notice first.
-# The autoloader is the worktree's, which may hold an older release of this
-# package, so only use what every release has.
+# Setup and test record each worktree's databases, so clean drops exactly
+# those: one file per worktree, named after its id (see worktree_key), with
+# "test|development<TAB>name" lines.
+database_ledger_dir() {
+    echo "$COMMON_GIT_DIR/worktree-isolation/databases"
+}
+
+# Usage: record_database test|development NAME
+record_database() {
+    local file
+    file="$(database_ledger_dir)/$(basename "$CHECKOUT_GIT_DIR")"
+    mkdir -p "${file%/*}"
+    grep -qxF "$1"$'\t'"$2" "$file" 2> /dev/null || printf '%s\t%s\n' "$1" "$2" >> "$file"
+}
+
+# PHP only reaches the database server, inside the runtime, with everything
+# it needs in the environment (DB_* and MYSQL_ATTR_SSL_CA, as Laravel names
+# them). There's no autoloader: the worktree's vendor/ may hold another
+# release of this package, or nothing yet.
 # shellcheck disable=SC2016 # PHP code, expanded by PHP
-ENSURE_DB_PHP='
-    require "vendor/autoload.php";
+DB_CONNECT_PHP='
+    try {
+        $dsn = getenv("DB_SOCKET")
+            ? "mysql:unix_socket=" . getenv("DB_SOCKET")
+            : "mysql:host=" . (getenv("DB_HOST") ?: "127.0.0.1") . ";port=" . (getenv("DB_PORT") ?: 3306);
+        $options = [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION];
+        if (getenv("MYSQL_ATTR_SSL_CA")) {
+            $options[defined("Pdo\\Mysql::ATTR_SSL_CA") ? constant("Pdo\\Mysql::ATTR_SSL_CA") : PDO::MYSQL_ATTR_SSL_CA] = getenv("MYSQL_ATTR_SSL_CA");
+        }
+        $pdo = new PDO($dsn, getenv("DB_USERNAME") ?: "", getenv("DB_PASSWORD") ?: "", $options);
+    } catch (Throwable $e) {
+        fwrite(STDERR, "Could not connect to the database server: " . $e->getMessage() . "\n");
+        exit(1);
+    }
+'
+
+# shellcheck disable=SC2016 # PHP code, expanded by PHP
+DB_NAME_PHP='
+    $isWorktreeDatabase = fn ($name) => preg_match("/^[a-z0-9_-]+$/", $name) === 1 && str_contains($name, "_wt_");
+'
+
+# Creates the per-worktree database named by DB_DATABASE, which bash already
+# derived, in DB_CHARSET/DB_COLLATION when set. Refuses anything that isn't a
+# per-worktree name or is the main checkout's (MAIN_DB_DATABASE). Prints
+# "<name> created|existing" as its last line; the leading newline keeps that
+# line intact if PHP emitted a notice first.
+# shellcheck disable=SC2016 # PHP code, expanded by PHP
+ENSURE_DB_PHP="$DB_NAME_PHP"'
     $name = (string) getenv("DB_DATABASE");
-    if (! str_contains($name, "_wt_")) {
-        fwrite(STDERR, "Refusing to create \"$name\": not a per-worktree database name.\n");
+    if (! $isWorktreeDatabase($name) || $name === getenv("MAIN_DB_DATABASE")) {
+        fwrite(STDERR, "Refusing to create \"$name\": not a per-worktree database name, or it is the main checkout database.\n");
         exit(1);
     }
-    if ($name === getenv("MAIN_DB_DATABASE")) {
-        fwrite(STDERR, "Refusing to use $name: it is the main checkout database.\n");
-        exit(1);
+'"$DB_CONNECT_PHP"'
+    $exists = $pdo->prepare("SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?");
+    $exists->execute([$name]);
+    if ($exists->fetchColumn()) {
+        echo "\n$name existing";
+        exit;
     }
-    $created = WorktreeIsolation\TestDatabaseResolver::ensureExists(
-        $name,
-        getenv("DB_HOST") ?: "127.0.0.1",
-        (int) (getenv("DB_PORT") ?: 3306),
-        getenv("DB_USERNAME") ?: "",
-        getenv("DB_PASSWORD") ?: "",
-    );
-    echo "\n", $name, $created ? " created" : " existing";
+    $sql = "CREATE DATABASE IF NOT EXISTS `$name`";
+    foreach (["CHARACTER SET" => "DB_CHARSET", "COLLATE" => "DB_COLLATION"] as $clause => $key) {
+        if (preg_match("/^[A-Za-z0-9_]+$/", (string) getenv($key)) === 1) {
+            $sql .= " $clause " . getenv($key);
+        }
+    }
+    $pdo->exec($sql);
+    echo "\n$name created";
+'
+
+# Drops the space-separated DROP_DATABASES, if they're per-worktree names.
+# Prints "dropped <name>" or "failed <name>: <reason>" per database.
+# shellcheck disable=SC2016 # PHP code, expanded by PHP
+DROP_DB_PHP="$DB_NAME_PHP$DB_CONNECT_PHP"'
+    foreach (preg_split("/\s+/", trim((string) getenv("DROP_DATABASES")), -1, PREG_SPLIT_NO_EMPTY) as $name) {
+        if (! $isWorktreeDatabase($name)) {
+            echo "failed $name: not a per-worktree database name\n";
+            continue;
+        }
+        try {
+            $pdo->exec("DROP DATABASE IF EXISTS `$name`");
+            echo "dropped $name\n";
+        } catch (PDOException $e) {
+            echo "failed $name: ", $e->getMessage(), "\n";
+        }
+    }
 '
 
 # Validates ENSURE_DB_PHP's output and prints its last line.
@@ -485,11 +693,13 @@ parse_ensure_db_output() {
     echo "$last"
 }
 
-# Git settings for containers. Files can show up under another owner there
-# (rootless Docker, Docker Desktop), which git refuses as "dubious
-# ownership". The other worktrees aren't mounted, so git gc must not prune
-# them as stale.
-CONTAINER_GIT_ENV=(
+# Environment for every container this package runs commands in. Files can
+# show up under another owner there (rootless Docker, Docker Desktop), which
+# git refuses as "dubious ownership". The other worktrees aren't mounted, so
+# git gc must not prune them as stale. WORKTREE_IN_RUNTIME tells these
+# scripts, run inside, that they're already in the runtime.
+CONTAINER_ENV=(
+    -e WORKTREE_IN_RUNTIME=1
     -e GIT_CONFIG_COUNT=2
     -e GIT_CONFIG_KEY_0=safe.directory -e "GIT_CONFIG_VALUE_0=*"
     -e GIT_CONFIG_KEY_1=gc.worktreePruneExpire -e GIT_CONFIG_VALUE_1=never
@@ -503,12 +713,10 @@ CONTAINER_GIT_ENV=(
 # (git worktree add --relative-paths). Prints nothing in the main checkout,
 # or for a relative pointer without WORKDIR.
 container_git_dir() {
-    local workdir="${1:-}" pointer common suffix
+    local workdir="${1:-}" pointer suffix
     in_main_checkout && return 0
-    pointer="$(sed -n 's/^gitdir: //p' "$PROJECT_ROOT/.git")"
-    common="$(git rev-parse --path-format=absolute --git-common-dir)"
-    suffix="$(git rev-parse --path-format=absolute --git-dir)"
-    suffix="${suffix#"$common"}"
+    pointer="$(sed -n 's/^gitdir: //p' "$TOPLEVEL/.git")"
+    suffix="${CHECKOUT_GIT_DIR#"$COMMON_GIT_DIR"}"
     if [[ "$pointer" != /* ]]; then
         [[ -n "$workdir" ]] || return 0
         pointer="$(normalize_path "$workdir/$pointer")"
@@ -534,24 +742,37 @@ normalize_path() {
 
 # The compose service that normally runs the image sets environment a plain
 # docker run lacks (Sail's laravel.test: LARAVEL_SAIL, XDEBUG_MODE, and
-# whatever the project adds). It's read on every run, with Compose resolving
-# it against this checkout's own .env, so it follows the compose file and
-# never lands in the committed config. WORKTREE_DOCKER_SERVICE names the
-# service; unset, it's the one using the image, and empty turns this off.
-# Fills SERVICE_ENV with KEY=value pairs.
+# whatever the project adds). Compose resolves it against this checkout's own
+# .env, so it follows the compose file and never lands in the committed
+# config. WORKTREE_DOCKER_SERVICE names the service; unset, it's the one using
+# the image, and empty turns this off. Fills SERVICE_ENV with KEY=value pairs.
+# The result is cached in the checkout's git dir until the compose files or
+# .env change, since `docker compose config` is slow to run on every command.
 load_service_env() {
     SERVICE_ENV=()
-    local service="${WORKTREE_DOCKER_SERVICE-}" args=(docker compose) config lines line key value
+    local service="${WORKTREE_DOCKER_SERVICE-}" args=(docker compose) cache key config lines line value file
     if [[ -n "${WORKTREE_DOCKER_SERVICE+set}" && -z "$service" ]]; then
         return 0
     fi
-    if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
-        args+=(-f "$WORKTREE_COMPOSE_FILE")
-    elif ! has_compose_file; then
+    find_compose_files "$PROJECT_ROOT"
+    if [[ ${#COMPOSE_FILES[@]} -eq 0 ]]; then
         [[ -z "$service" ]] || echo "Warning: no compose file, so containers don't get the $service service's environment." >&2
         return 0
     fi
 
+    cache="$CHECKOUT_GIT_DIR/worktree-isolation.service-env"
+    key="$IMAGE|$service|${COMPOSE_FILES[*]}"
+    if [[ -f "$cache" && "$(head -n 1 "$cache")" == "$key" ]] &&
+        [[ -z "$(find "${COMPOSE_FILES[@]}" "$PROJECT_ROOT/.env" -newer "$cache" 2> /dev/null)" ]]; then
+        while IFS= read -r -d '' line; do
+            [[ -z "$line" ]] || SERVICE_ENV+=("$line")
+        done < <(tail -n +2 "$cache")
+        return 0
+    fi
+
+    for file in "${COMPOSE_FILES[@]}"; do
+        args+=(-f "$file")
+    done
     if ! config="$(cd "$PROJECT_ROOT" && "${args[@]}" config 2> /dev/null)"; then
         echo "Warning: 'docker compose config' failed, so containers don't get the compose service's environment." >&2
         return 0
@@ -562,24 +783,20 @@ load_service_env() {
         return 0
     fi
 
-    while IFS=$'\t' read -r key value; do
+    while IFS=$'\t' read -r line value; do
         # HOME and PATH belong to the image and to the container's user
         # (HOME=/tmp, see CONTAINER_USER_ARGS); exporting them here would
         # also change this script's own.
-        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "$key" != HOME && "$key" != PATH ]] || continue
+        [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "$line" != HOME && "$line" != PATH ]] || continue
         value="$(yaml_scalar "$value")" || continue
-        SERVICE_ENV+=("$key=$value")
+        SERVICE_ENV+=("$line=$value")
     done < <(printf '%s\n' "$lines" | tail -n +2)
-}
 
-# Whether Compose would find a compose file in the checkout without -f.
-has_compose_file() {
-    local file
-    [[ -n "${COMPOSE_FILE:-$(env_file_value "$PROJECT_ROOT/.env" COMPOSE_FILE)}" ]] && return 0
-    for file in compose.yaml compose.yml docker-compose.yml docker-compose.yaml; do
-        [[ -f "$PROJECT_ROOT/$file" ]] && return 0
-    done
-    return 1
+    # Values may hold newlines, so the pairs are NUL-separated.
+    {
+        printf '%s\n' "$key"
+        [[ ${#SERVICE_ENV[@]} -eq 0 ]] || printf '%s\0' "${SERVICE_ENV[@]}"
+    } > "$cache.$$" && mv "$cache.$$" "$cache"
 }
 
 # Reads `docker compose config` output, whose layout Compose normalizes:
@@ -673,7 +890,7 @@ build_docker_image_args() {
     DOCKER_ARGS=(
         docker run --rm
         "${CONTAINER_USER_ARGS[@]}"
-        "${CONTAINER_GIT_ENV[@]}"
+        "${CONTAINER_ENV[@]}"
     )
     read -ra pairs <<< "${WORKTREE_DOCKER_ENV:-}"
     for pair in ${SERVICE_ENV[@]+"${SERVICE_ENV[@]}"} ${pairs[@]+"${pairs[@]}"}; do
@@ -684,7 +901,7 @@ build_docker_image_args() {
     # Read-write: git add, stash and the like write to the index.
     git_dir="$(container_git_dir "$WORKDIR")"
     if [[ -n "$git_dir" ]]; then
-        DOCKER_ARGS+=(-v "$(git rev-parse --path-format=absolute --git-common-dir):$git_dir")
+        DOCKER_ARGS+=(-v "$COMMON_GIT_DIR:$git_dir")
     fi
     DOCKER_ARGS+=(-w "$WORKDIR")
 
@@ -746,7 +963,7 @@ run_in_runtime() (
 # valid shell (e.g. APP_NAME=My App), and sourcing would expand $ and
 # backticks. A quoted value is taken verbatim up to its closing quote; an
 # unquoted one loses a trailing " # comment" and surrounding whitespace.
-# Matches parseEnvFile() in worktree-clean.
+# Sets PARSED_VALUE rather than printing it, to save a subshell per line.
 parse_env_value() {
     local value="$1"
     value="${value%$'\r'}"
@@ -765,7 +982,7 @@ parse_env_value() {
             value="${value%"${value##*[![:space:]]}"}"
             ;;
     esac
-    printf '%s\n' "$value"
+    PARSED_VALUE="$value"
 }
 
 ENV_LINE_PATTERN='^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$'
@@ -776,19 +993,23 @@ env_file_value() {
     [[ -f "$file" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ $ENV_LINE_PATTERN && "${BASH_REMATCH[2]}" == "$key" ]]; then
-            value="$(parse_env_value "${BASH_REMATCH[3]}")"
+            parse_env_value "${BASH_REMATCH[3]}"
+            value="$PARSED_VALUE"
         fi
     done < "$file"
-    echo "$value"
+    printf '%s\n' "$value"
 }
 
-# Exports every assignment in a dotenv file.
+# Usage: load_env_file FILE [PREFIX]
+# Exports every assignment in a dotenv file, or only the keys starting with
+# PREFIX.
 load_env_file() {
     local line
     [[ -f "$1" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
-        if [[ "$line" =~ $ENV_LINE_PATTERN ]]; then
-            export "${BASH_REMATCH[2]}=$(parse_env_value "${BASH_REMATCH[3]}")"
+        if [[ "$line" =~ $ENV_LINE_PATTERN && "${BASH_REMATCH[2]}" == "${2:-}"* ]]; then
+            parse_env_value "${BASH_REMATCH[3]}"
+            export "${BASH_REMATCH[2]}=$PARSED_VALUE"
         fi
     done < "$1"
 }

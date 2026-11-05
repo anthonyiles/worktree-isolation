@@ -7,38 +7,15 @@
     "require": {
         "php": "^8.2"
     },
-    "require-dev": {
-        "illuminate/support": "^12.0|^13.0",
-        "orchestra/testbench": "^10.0|^11.0"
-    },
     "suggest": {
-        "ext-pdo_mysql": "Required for per-worktree MySQL/MariaDB databases (in the runtime that runs setup, test and clean).",
-        "illuminate/support": "Required for artisan commands (worktree:install, worktree:clean). Not needed if using vendor/bin/worktree directly."
-    },
-    "autoload": {
-        "psr-4": {
-            "WorktreeIsolation\\": "src/"
-        }
-    },
-    "autoload-dev": {
-        "psr-4": {
-            "WorktreeIsolation\\Tests\\": "tests/"
-        }
+        "ext-pdo_mysql": "Required for per-worktree MySQL/MariaDB databases (in the runtime that runs setup, test and clean)."
     },
     "scripts": {
-        "test": "phpunit",
-        "test:bash": "bats tests/bats"
+        "test": "bats tests/bats"
     },
     "bin": [
         "stubs/bin/worktree"
     ],
-    "extra": {
-        "laravel": {
-            "providers": [
-                "WorktreeIsolation\\WorktreeIsolationServiceProvider"
-            ]
-        }
-    },
     "config": {
         "sort-packages": true
     }

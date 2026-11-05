@@ -264,3 +264,55 @@ XML
     run test_database_base
     [ "$output" = my_long_app_nam_test ]
 }
+
+@test "the database snippets run under PHP and refuse names that aren't per-worktree" {
+    command -v php > /dev/null || skip "needs PHP"
+
+    # The name is checked before connecting.
+    DB_DATABASE=myapp run php -r "$ENSURE_DB_PHP"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'Refusing to create "myapp"'* ]]
+    MAIN_DB_DATABASE=myapp_wt_x DB_DATABASE=myapp_wt_x run php -r "$ENSURE_DB_PHP"
+    [[ "$output" == *'Refusing to create "myapp_wt_x"'* ]]
+
+    # Port 1 refuses connections (or there's no pdo_mysql).
+    DB_HOST=127.0.0.1 DB_PORT=1 DB_DATABASE=myapp_wt_x run php -r "$ENSURE_DB_PHP"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Could not connect to the database server"* ]]
+    DB_HOST=127.0.0.1 DB_PORT=1 DROP_DATABASES=myapp_wt_x run php -r "$DROP_DB_PHP"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Could not connect to the database server"* ]]
+}
+
+@test "names a worktree after its git admin dir and the clone, so same-named directories differ" {
+    repo="$BATS_TEST_TMPDIR/repo"
+    git init -q "$repo"
+    git -C "$repo" -c user.email=t@example.com -c user.name=T commit -q --allow-empty -m init
+    git -C "$repo" worktree add -q -b a "$BATS_TEST_TMPDIR/one/feature"
+    git -C "$repo" worktree add -q -b b "$BATS_TEST_TMPDIR/two/feature"
+    mkdir -p "$repo/.git/worktree-isolation"
+    echo c0de > "$repo/.git/worktree-isolation/clone-id"
+    echo "WORKTREE_RUNTIME=native" > "$repo/.worktree-isolation.env"
+
+    cd "$BATS_TEST_TMPDIR/one/feature"
+    run bash -c "source '$BATS_TEST_DIRNAME/../../stubs/bin/_worktree-lib.sh'; load_worktree_config; echo \$WORKTREE_KEY"
+    [ "$output" = "feature-c0de" ]
+    cd "$BATS_TEST_TMPDIR/two/feature"
+    run bash -c "source '$BATS_TEST_DIRNAME/../../stubs/bin/_worktree-lib.sh'; load_worktree_config; echo \$WORKTREE_KEY"
+    [ "$output" = "feature1-c0de" ]
+
+    cd "$repo"
+    load_worktree_list
+    [ "${WT_IDS[*]}" = "feature feature1" ]
+}
+
+@test "creates a clone id once" {
+    repo="$BATS_TEST_TMPDIR/repo"
+    git init -q "$repo"
+    cd "$repo"
+    load_git_paths
+
+    first="$(clone_id)"
+    [[ "$first" =~ ^[0-9a-f]{4}$ ]]
+    [ "$(clone_id)" = "$first" ]
+}

@@ -43,12 +43,13 @@ load_env_file "$PROJECT_ROOT/$TESTING_ENV_FILE"
 # ---------------------------------------------------------------------------
 # 3. Run tests
 # ---------------------------------------------------------------------------
-# Runs inside the target runtime. With ENSURE_DB_PHP set, it first creates
-# this worktree's test database (DB_DATABASE) if it's missing. PHP's output
-# is only shown on failure, since the CLI prints errors to stdout.
+# Runs inside the target runtime, with sh: not every image has bash. With
+# ENSURE_DB_PHP set, it first creates this worktree's test database
+# (DB_DATABASE) if it's missing. PHP's output is only shown on failure, since
+# the CLI prints errors to stdout.
 # shellcheck disable=SC2016 # expanded by the inner shell
 RUN_TESTS='
-    if [[ -n "${ENSURE_DB_PHP:-}" ]]; then
+    if [ -n "${ENSURE_DB_PHP:-}" ]; then
         if ! output="$(php -r "$ENSURE_DB_PHP" 2>&1)"; then
             printf "%s\n" "$output" >&2
             echo "Error: could not create the test database $DB_DATABASE." >&2
@@ -61,25 +62,27 @@ RUN_TESTS='
 '
 
 TEST_ENV=(-e "TEST_COMMAND=$TEST_COMMAND")
+cache_phpunit "$PROJECT_ROOT"
 
 # The test database is passed in the environment, which beats .env,
 # .env.testing and phpunit.xml's <env>, so no file needs to name it.
 if tests_use_mysql; then
-    if ! DB_DATABASE="$(derive_test_database_name "$(test_database_base)" "$WORKTREE_BASENAME")"; then
+    if ! DB_DATABASE="$(derive_test_database_name "$(test_database_base)" "$WORKTREE_KEY")"; then
         echo "Error: could not derive the per-worktree test database from '$(test_database_base)'." >&2
         exit 1
     fi
     warn_if_phpunit_forces_database
+    record_database test "$DB_DATABASE"
+    db_env_args test "$PROJECT_ROOT"
     TEST_ENV+=(
         -e "ENSURE_DB_PHP=$ENSURE_DB_PHP"
         -e "MAIN_DB_DATABASE=$(main_test_database)"
         -e "DB_DATABASE=$DB_DATABASE"
+        ${DB_ENV[@]+"${DB_ENV[@]}"}
     )
-    for var in DB_CONNECTION DB_HOST DB_PORT DB_USERNAME DB_PASSWORD; do
-        if value="$(test_db_setting "$PROJECT_ROOT" "$var")"; then
-            TEST_ENV+=(-e "$var=$value")
-        fi
-    done
+    if value="$(test_db_setting "$PROJECT_ROOT" DB_CONNECTION)"; then
+        TEST_ENV+=(-e "DB_CONNECTION=$value")
+    fi
 fi
 
 # A container doesn't inherit this shell's environment, so pass it every
@@ -91,4 +94,4 @@ if [[ "$RUNTIME" != native ]]; then
     done < <(env_file_keys "$PROJECT_ROOT/$TESTING_ENV_FILE")
 fi
 
-run_in_runtime "${TEST_ENV[@]}" bash -c "$RUN_TESTS" -- "$@"
+run_in_runtime "${TEST_ENV[@]}" sh -c "$RUN_TESTS" sh "$@"

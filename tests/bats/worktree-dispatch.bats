@@ -19,17 +19,10 @@ setup() {
     LOG="$BATS_TEST_TMPDIR/calls.log"
     : > "$LOG"
 
-    for name in worktree-install worktree-setup worktree-prune test; do
+    for name in worktree-install worktree-setup worktree-prune worktree-clean test; do
         cat > "$DISPATCH_DIR/$name" <<SCRIPT
 #!/usr/bin/env bash
 echo "$name \$*" >> "$LOG"
-SCRIPT
-    done
-    for name in worktree-clean; do
-        cat > "$DISPATCH_DIR/$name" <<SCRIPT
-#!/usr/bin/env php
-<?php
-file_put_contents('$LOG', '$name ' . implode(' ', array_slice(\$argv, 1)) . "\\n", FILE_APPEND);
 SCRIPT
     done
 }
@@ -53,31 +46,9 @@ SCRIPT
 }
 
 @test "delegates 'clean' to worktree-clean with args forwarded" {
-    project="$BATS_TEST_TMPDIR/project"
-    mkdir -p "$project"
-    git -C "$project" init -q
-    echo "WORKTREE_RUNTIME=native" > "$project/.worktree-isolation.env"
-    cd "$project"
-
-    run "$DISPATCH_DIR/worktree" clean --force
+    run "$DISPATCH_DIR/worktree" clean --all --force
     [ "$status" -eq 0 ]
-    [ "$(cat "$LOG")" = "worktree-clean --force --keep=" ]
-}
-
-@test "passes clean the databases of the existing worktrees" {
-    project="$BATS_TEST_TMPDIR/project"
-    mkdir -p "$project"
-    git -C "$project" init -q
-    git -C "$project" -c user.email=test@example.com -c user.name=Test commit -q --allow-empty -m init
-    git -C "$project" worktree add -q -b feature "$BATS_TEST_TMPDIR/worktrees/Feature-Auth"
-    echo "WORKTREE_RUNTIME=native" > "$project/.worktree-isolation.env"
-    printf 'DB_CONNECTION=mysql\nDB_DATABASE=app_testing\n' > "$project/.env.testing"
-    printf 'DB_CONNECTION=mysql\nDB_DATABASE=myapp\n' > "$project/.env"
-    cd "$project"
-
-    run "$DISPATCH_DIR/worktree" clean
-    [ "$status" -eq 0 ]
-    [ "$(cat "$LOG")" = "worktree-clean --keep=myapp_test_wt_feature-auth,myapp_wt_feature-auth" ]
+    [ "$(cat "$LOG")" = "worktree-clean --all --force" ]
 }
 
 @test "delegates 'prune' to worktree-prune with args forwarded" {

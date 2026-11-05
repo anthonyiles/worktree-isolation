@@ -5,7 +5,6 @@
 # exposed as a Composer bin.
 #
 # Plain bash, so it runs on hosts without PHP (e.g. Sail projects).
-# Laravel projects can also use `php artisan worktree:install` which delegates here.
 #
 # Usage:
 #   vendor/bin/worktree install
@@ -30,13 +29,15 @@ Usage: vendor/bin/worktree install [OPTIONS]
 Options:
   --runtime=DRIVER              Runtime driver: native, docker-compose, docker-image
                                  (default: docker-image when Laravel Sail is detected,
-                                 else native)
+                                 docker-compose for a compose file and no PHP on the
+                                 host, else native)
   --docker-image=NAME           Docker image name (docker-image runtime)
   --docker-network=NAME         Docker network name (docker-image runtime)
   --compose-service=NAME        Docker Compose service name (docker-compose runtime, default: app)
   --compose-project-base=NAME   Docker Compose project base name (docker-compose runtime,
                                  default: derived from the project directory name)
-  --test-command=CMD            Test command (default: php artisan test)
+  --test-command=CMD            Test command (default: php artisan test, or Pest or
+                                 PHPUnit without artisan)
   --force                       Overwrite existing files
   --agents[=FILES]              Add worktree instructions for AI agents to FILES
                                  (comma-separated, default: whichever of AGENTS.md
@@ -51,10 +52,15 @@ HELP
 # Functions
 # ---------------------------------------------------------------------------
 
+# The main checkout, which holds the config every worktree reads, even when
+# this runs in a worktree.
 resolve_project_root() {
-    # This script runs from inside vendor/, not the project root —
-    # resolve via git instead.
-    git rev-parse --show-toplevel 2> /dev/null || pwd
+    local common
+    if common="$(git rev-parse --path-format=absolute --git-common-dir 2> /dev/null)"; then
+        dirname "$common"
+    else
+        pwd
+    fi
 }
 
 find_stubs_dir() {
@@ -70,18 +76,12 @@ find_stubs_dir() {
 
 # Sets SAIL_IMAGE and SAIL_NETWORK, or returns 1 when Sail isn't detected.
 detect_sail() {
-    local project_dir="$1" compose_file="" file
+    local project_dir="$1"
     [[ -e "$project_dir/vendor/bin/sail" ]] || return 1
+    find_compose_files "$project_dir"
+    [[ ${#COMPOSE_FILES[@]} -gt 0 ]] || return 1
 
-    for file in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
-        if [[ -e "$project_dir/$file" ]]; then
-            compose_file="$project_dir/$file"
-            break
-        fi
-    done
-    [[ -n "$compose_file" ]] || return 1
-
-    SAIL_IMAGE="$(grep -m 1 -E "^[[:space:]]*image:[[:space:]]*['\"]?sail-" "$compose_file" \
+    SAIL_IMAGE="$(cat "${COMPOSE_FILES[@]}" 2> /dev/null | grep -m 1 -E "^[[:space:]]*image:[[:space:]]*['\"]?sail-" \
         | sed -E "s/^[[:space:]]*image:[[:space:]]*['\"]?(sail-[^'\"[:space:]]+).*/\1/")" || SAIL_IMAGE=""
     SAIL_NETWORK="$(compose_project_name "$project_dir")_sail"
 }
@@ -96,23 +96,18 @@ compose_project_name() {
     printf '%s' "$name" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -cd 'a-z0-9_-' | sed -E 's/^[_-]+//'
 }
 
+# Git 2.54+ has config-based hooks (hook.<name>.command), which run next to
+# a project's own hook files. Older git gets a post-checkout hook file.
 verify_git_version() {
-    local output major minor
+    local output
     if ! output="$(git --version 2>&1)"; then
         echo "Error: Could not determine git version. Is git installed?" >&2
         return 1
     fi
+    output="${output%%$'\n'*}"
 
-    if [[ "${output%%$'\n'*}" =~ ([0-9]+)\.([0-9]+) ]]; then
-        major="${BASH_REMATCH[1]}"
-        minor="${BASH_REMATCH[2]}"
-    else
-        major=0
-        minor=0
-    fi
-
-    if (( 10#$major < 2 || (10#$major == 2 && 10#$minor < 54) )); then
-        echo "Error: Git 2.54+ is required for config-based hooks. You have Git $major.$minor." >&2
+    if ! version_at_least "$output" 2 31; then
+        echo "Error: Git 2.31+ is required. You have: $output." >&2
         if [[ "$(uname -s)" == Darwin ]]; then
             echo "  Upgrade with: brew upgrade git" >&2
         else
@@ -121,7 +116,12 @@ verify_git_version() {
         return 1
     fi
 
-    echo "  Git version: $major.$minor (OK)"
+    if version_at_least "$output" 2 54; then
+        HOOK_MODE="config"
+    else
+        HOOK_MODE="file"
+    fi
+    echo "  Git version: ${output#git version } (OK)"
 }
 
 create_env_config() {
@@ -144,6 +144,8 @@ create_env_config() {
 
     if [[ -n "${OPT_TEST_COMMAND:-}" ]]; then
         lines+=("WORKTREE_TEST_COMMAND=$OPT_TEST_COMMAND")
+    elif [[ "$LARAVEL" != true ]]; then
+        lines+=("WORKTREE_TEST_COMMAND=$(default_test_command)")
     else
         lines+=('# WORKTREE_TEST_COMMAND=php vendor/bin/phpunit')
     fi
@@ -193,14 +195,31 @@ create_env_config() {
         ''
         '# Per-worktree development database (MySQL/MariaDB)'
         'WORKTREE_DEV_DB_PER_WORKTREE=true'
-        '# WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction'
-        '# WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction'
+    )
+    if [[ "$LARAVEL" == true ]]; then
+        lines+=(
+            '# WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction'
+            '# WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction'
+        )
+    else
+        lines+=(
+            '# Commands run on a worktree'"'"'s development database: always, and when it'"'"'s new'
+            'WORKTREE_DEV_DB_MIGRATE_COMMAND='
+            'WORKTREE_DEV_DB_SEED_COMMAND='
+        )
+    fi
+
+    lines+=(
         ''
-        '# Merged worktrees: report | ask | remove. Merged into origin'"'"'s default branch'
-        '# unless WORKTREE_PRUNE_BRANCH is set; setup checks after each new worktree.'
-        '# WORKTREE_PRUNE=ask'
+        '# Setup removes worktrees in the background whose branch is merged into'
+        '# origin'"'"'s default branch (or WORKTREE_PRUNE_BRANCH), or that have had no git'
+        '# activity for WORKTREE_PRUNE_AFTER days (0: never). Branches are kept.'
+        '# WORKTREE_PRUNE_AFTER=7'
         '# WORKTREE_PRUNE_BRANCH=develop'
         '# WORKTREE_PRUNE_ON_SETUP=true'
+        ''
+        '# Untracked files copied into each worktree, space-separated'
+        '# WORKTREE_COPY_FILES="auth.json"'
         ''
         '# Command run at the end of setup, e.g. to build assets for tests'
         '# WORKTREE_POST_SETUP_COMMAND=npm run build'
@@ -213,6 +232,15 @@ create_env_config() {
     echo "  Created: .worktree-isolation.env"
 }
 
+# Pest when the project has it, else PHPUnit.
+default_test_command() {
+    if [[ -e "$PROJECT_DIR/vendor/bin/pest" ]]; then
+        echo "php vendor/bin/pest"
+    else
+        echo "php vendor/bin/phpunit"
+    fi
+}
+
 # Single-quotes a value for the shell, the way PHP's escapeshellarg() does, so
 # configs written by the earlier PHP installer stay byte-identical.
 shell_quote() {
@@ -220,14 +248,20 @@ shell_quote() {
     printf "'%s'" "${1//\'/$escaped}"
 }
 
+HOOK_MARKER='# worktree-isolation post-checkout hook'
+
 configure_git_hooks() {
-    # hook.*.command must be an absolute path: git resolves a relative one
-    # against the cwd of whatever worktree is running the hook (the new
-    # worktree, for post-checkout), not the main repo.
-    # Run through bash so it works even when Composer didn't keep the
-    # executable bit (zip dists without unzip).
+    # The hook's path must be absolute: git runs post-checkout from the new
+    # worktree, not the main repo. Run through bash so it works even when
+    # Composer didn't keep the executable bit (zip dists without unzip).
     local hook_command
     hook_command="bash $(shell_quote "$STUBS_DIR/githooks/post-checkout-worktree-setup.sh")"
+
+    if [[ "$HOOK_MODE" == file ]]; then
+        install_hook_file "$hook_command"
+        return
+    fi
+    remove_hook_file
 
     if (cd "$PROJECT_DIR" \
         && git config --local hook.worktree-setup.command "$hook_command" \
@@ -239,6 +273,49 @@ configure_git_hooks() {
         echo "    git config --local hook.worktree-setup.command $(shell_quote "$hook_command")"
         echo "    git config --local --replace-all hook.worktree-setup.event post-checkout"
     fi
+}
+
+# Git before 2.54: a post-checkout file in the hooks directory. A project's
+# own post-checkout is kept as post-checkout.local and run first. With
+# core.hooksPath (e.g. husky), the hooks directory belongs to the project,
+# so the line to add is printed instead.
+install_hook_file() {
+    local hook_command="$1" hooks_dir hook
+    if [[ -n "$(git -C "$PROJECT_DIR" config core.hooksPath)" ]]; then
+        echo "  Warning: core.hooksPath is set, so the hook isn't installed automatically."
+        echo "  Add this line to your post-checkout hook:"
+        echo "    $hook_command \"\$@\""
+        return
+    fi
+    hooks_dir="$(git -C "$PROJECT_DIR" rev-parse --path-format=absolute --git-path hooks)"
+    hook="$hooks_dir/post-checkout"
+    mkdir -p "$hooks_dir"
+    if [[ -f "$hook" ]] && ! grep -qxF "$HOOK_MARKER" "$hook"; then
+        mv "$hook" "$hook.local"
+        echo "  Moved: your post-checkout hook to post-checkout.local (still runs)"
+    fi
+    cat > "$hook" <<HOOK
+#!/usr/bin/env bash
+$HOOK_MARKER
+local_hook="\$(dirname "\$0")/post-checkout.local"
+if [[ -x "\$local_hook" ]]; then
+    "\$local_hook" "\$@" || exit
+fi
+exec $hook_command "\$@"
+HOOK
+    chmod +x "$hook"
+    echo "  Installed: post-checkout hook (${hook#"$PROJECT_DIR"/})"
+}
+
+# After a git upgrade: the config-based hook replaces the file, so setup
+# doesn't run twice.
+remove_hook_file() {
+    local hook
+    hook="$(git -C "$PROJECT_DIR" rev-parse --path-format=absolute --git-path hooks 2> /dev/null)/post-checkout" || return 0
+    [[ -f "$hook" ]] && grep -qxF "$HOOK_MARKER" "$hook" || return 0
+    rm -f "$hook"
+    [[ ! -f "$hook.local" ]] || mv "$hook.local" "$hook"
+    echo "  Removed: the post-checkout hook file, replaced by the config-based hook"
 }
 
 # Usage: write_agent_instructions [FILES]  (no argument: pick the defaults)
@@ -405,20 +482,26 @@ fi
 # so the hook path written to git config would be wrong.
 if [[ "${LARAVEL_SAIL:-}" == 1 ]]; then
     echo "Error: Run the installer on the host, not inside Sail" >&2
-    echo "  (vendor/bin/worktree install or php artisan worktree:install, without sail)." >&2
+    echo "  (vendor/bin/worktree install, without sail)." >&2
     exit 1
 fi
 
 PROJECT_DIR="${OPT_PROJECT_DIR-$(resolve_project_root)}"
 
-SAIL_DETECTED=false
+LARAVEL=false
+[[ ! -f "$PROJECT_DIR/artisan" ]] || LARAVEL=true
+
+DETECTED=""
 if [[ -n "${OPT_RUNTIME+x}" ]]; then
     RUNTIME_OPT="$OPT_RUNTIME"
 elif detect_sail "$PROJECT_DIR"; then
-    SAIL_DETECTED=true
+    DETECTED="Detected Laravel Sail: using the docker-image runtime"
     RUNTIME_OPT=docker-image
     OPT_DOCKER_IMAGE="${OPT_DOCKER_IMAGE-$SAIL_IMAGE}"
     OPT_DOCKER_NETWORK="${OPT_DOCKER_NETWORK-$SAIL_NETWORK}"
+elif find_compose_files "$PROJECT_DIR" && [[ ${#COMPOSE_FILES[@]} -gt 0 ]] && ! command -v php > /dev/null 2>&1; then
+    RUNTIME_OPT=docker-compose
+    DETECTED="Detected a compose file and no PHP on the host: using the docker-compose runtime (service: ${OPT_COMPOSE_SERVICE-app}; change it with --compose-service)"
 else
     RUNTIME_OPT=native
 fi
@@ -435,8 +518,8 @@ fi
 echo "Installing worktree isolation..."
 echo ""
 
-if [[ "$SAIL_DETECTED" == true ]]; then
-    echo "  Detected Laravel Sail: using the docker-image runtime"
+if [[ -n "$DETECTED" ]]; then
+    echo "  $DETECTED"
 fi
 
 # 1. Verify git version
@@ -465,13 +548,12 @@ echo "Worktree isolation installed and activated!"
 echo ""
 echo "What was done:"
 echo "  - Created .worktree-isolation.env (runtime: $RUNTIME_OPT)"
-echo "  - Configured git hook.worktree-setup.command/event (local, this clone only)"
-echo "    pointing at the vendor copy of the post-checkout hook"
+echo "  - Registered a post-checkout git hook (this clone only) that runs setup"
+echo "    for each new worktree"
 echo ""
 echo "Next steps:"
 echo "  1. Review .worktree-isolation.env and adjust if needed"
 echo "  2. Commit .worktree-isolation.env"
-echo "  3. Other engineers just need to run: vendor/bin/worktree install (or php artisan worktree:install for Laravel)"
-echo "     once per clone — this activates the hook locally. Worktrees of branches without the"
-echo "     committed .worktree-isolation.env are skipped."
+echo "  3. Other engineers just need to run: vendor/bin/worktree install once per clone,"
+echo "     which keeps the committed config and registers the hook."
 echo ""

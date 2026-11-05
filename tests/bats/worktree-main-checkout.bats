@@ -18,7 +18,7 @@ use_runtime() {
         native) echo "WORKTREE_RUNTIME=native" ;;
         docker-compose) printf 'WORKTREE_RUNTIME=docker-compose\nWORKTREE_COMPOSE_SERVICE=app\nWORKTREE_COMPOSE_PROJECT_BASE=myapp\n' ;;
         docker-image) printf 'WORKTREE_RUNTIME=docker-image\nWORKTREE_DOCKER_IMAGE=myapp:latest\n' ;;
-    esac > "$WORKTREE_DIR/.worktree-isolation.env"
+    esac > "$MAIN_REPO/.worktree-isolation.env"
 }
 
 enable_main_checkout() {
@@ -93,7 +93,7 @@ enable_main_checkout() {
     [ "$status" -eq 0 ]
     run grep -- " ps " "$DOCKER_LOG"
     [ "$status" -ne 0 ]
-    run grep -- "-p myapp-feature-auth exec " "$DOCKER_LOG"
+    run grep -- "-p myapp-feature-auth-c0de exec " "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -129,15 +129,28 @@ $MAIN_REAL: -v" ]
     done
 }
 
-@test "without docker on PATH, runs the command directly" {
+@test "inside a container this package started, runs the command directly" {
+    for runtime in docker-compose docker-image; do
+        use_runtime "$runtime"
+        : > "$PHP_RUN_LOG"
+
+        WORKTREE_IN_RUNTIME=1 run bash "$STUBS_DIR/worktree" php -v
+        [ "$status" -eq 0 ]
+        [ "$(cat "$PHP_RUN_LOG")" = "$WORKTREE_REAL: -v" ]
+    done
+    [ ! -s "$DOCKER_LOG" ]
+}
+
+@test "without docker on PATH, fails instead of running on the host" {
     nodocker="$(path_without_docker)"
     for runtime in docker-compose docker-image; do
         use_runtime "$runtime"
         : > "$PHP_RUN_LOG"
 
         PATH="$nodocker" run bash "$STUBS_DIR/worktree" php -v
-        [ "$status" -eq 0 ]
-        [ "$(cat "$PHP_RUN_LOG")" = "$WORKTREE_REAL: -v" ]
+        [ "$status" -eq 1 ]
+        [[ "$output" == *"not found"* ]]
+        [ ! -s "$PHP_RUN_LOG" ]
     done
 }
 
@@ -173,7 +186,7 @@ $MAIN_REAL: -v" ]
 
 @test "WORKTREE_DOCKER_ENV reaches every container by name, in worktrees and the main checkout" {
     use_runtime docker-image
-    echo 'WORKTREE_DOCKER_ENV="PHPSTAN_MAX_PROCESSES=4 FOO=a=b"' >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo 'WORKTREE_DOCKER_ENV="PHPSTAN_MAX_PROCESSES=4 FOO=a=b"' >> "$MAIN_REPO/.worktree-isolation.env"
     log_docker_argv
 
     run bash "$STUBS_DIR/worktree" php -v
@@ -198,19 +211,19 @@ $MAIN_REAL: -v" ]
 
 @test "test's testing environment wins over WORKTREE_DOCKER_ENV" {
     use_runtime docker-image
-    echo 'WORKTREE_DOCKER_ENV="DB_DATABASE=other"' >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo 'WORKTREE_DOCKER_ENV="DB_DATABASE=other"' >> "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
 
     output="$(cat "$DOCKER_LOG")"
-    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth"* ]]
+    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth-c0de"* ]]
     [[ "$output" != *"DB_DATABASE=other"* ]]
 }
 
 @test "rejects a WORKTREE_DOCKER_ENV entry that isn't KEY=value" {
     use_runtime docker-image
-    echo 'WORKTREE_DOCKER_ENV="FOO=1 BAR"' >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo 'WORKTREE_DOCKER_ENV="FOO=1 BAR"' >> "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/worktree" php -v
     [ "$status" -eq 1 ]

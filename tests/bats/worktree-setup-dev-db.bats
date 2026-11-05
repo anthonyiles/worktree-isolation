@@ -9,7 +9,7 @@ setup() {
     DEV_DB_STATE=created
     DEV_DB_NOISE=
     fake_resolver_output
-    echo "WORKTREE_DEV_DB_PER_WORKTREE=true" >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo "WORKTREE_DEV_DB_PER_WORKTREE=true" >> "$MAIN_REPO/.worktree-isolation.env"
 
     cat > "$WORKTREE_DIR/.env" <<ENV
 APP_NAME="My App"
@@ -28,6 +28,8 @@ ENV
 fake_resolver_output() {
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
+[[ " \$* " != *" compose version "* ]] || echo 2.29.0
+[[ " \$* " != *" config --services"* ]] || echo app
 args="\$("$FAKE_BIN/docker-args" "\$@")"
 echo "\$args" >> "$DOCKER_LOG"
 if [[ "\$args" == *"up -d"* ]]; then
@@ -35,9 +37,9 @@ if [[ "\$args" == *"up -d"* ]]; then
 fi
 if [[ "\$args" == *"DB_DATABASE=myapp_wt_"*"php -r"* ]]; then
     printf '%s' "$DEV_DB_NOISE"
-    echo "myapp_wt_feature-auth $DEV_DB_STATE"
+    echo "myapp_wt_feature-auth-c0de $DEV_DB_STATE"
 elif [[ "\$args" == *"php -r"* ]]; then
-    echo "myapp_test_wt_feature-auth created"
+    echo "myapp_test_wt_feature-auth-c0de created"
 fi
 exit 0
 SCRIPT
@@ -48,13 +50,13 @@ SCRIPT
     [ "$status" -eq 0 ]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
-    [ "$output" = "DB_DATABASE=myapp_wt_feature-auth" ]
+    [ "$output" = "DB_DATABASE=myapp_wt_feature-auth-c0de" ]
 
     run grep -- "-e DB_PASSWORD=secret" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
-    run grep -- "-T app bash -c php artisan migrate --no-interaction" "$DOCKER_LOG"
+    run grep -- "-T app sh -c php artisan migrate --no-interaction" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
-    run grep -- "-T app bash -c php artisan db:seed --no-interaction" "$DOCKER_LOG"
+    run grep -- "-T app sh -c php artisan db:seed --no-interaction" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -63,7 +65,7 @@ SCRIPT
     [ "$status" -eq 0 ]
 
     run grep "^up with" "$DOCKER_LOG"
-    [ "$output" = "up with DB_DATABASE=myapp_wt_feature-auth DB_DATABASE=myapp_test_wt_feature-auth" ]
+    [ "$output" = "up with DB_DATABASE=myapp_wt_feature-auth-c0de DB_DATABASE=myapp_test_wt_feature-auth-c0de" ]
 }
 
 @test "derives from the main checkout's name when .env holds an old or blank one" {
@@ -73,7 +75,7 @@ SCRIPT
     [ "$status" -eq 0 ]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
-    [ "$output" = "DB_DATABASE=myapp_wt_feature-auth" ]
+    [ "$output" = "DB_DATABASE=myapp_wt_feature-auth-c0de" ]
     run grep -- "-e MAIN_DB_DATABASE=myapp " "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
@@ -92,7 +94,7 @@ SCRIPT
 }
 
 @test "uses configured migrate and seed commands, and skips an empty one" {
-    cat >> "$WORKTREE_DIR/.worktree-isolation.env" <<ENV
+    cat >> "$MAIN_REPO/.worktree-isolation.env" <<ENV
 WORKTREE_DEV_DB_MIGRATE_COMMAND=
 WORKTREE_DEV_DB_SEED_COMMAND="php bin/seed --demo"
 ENV
@@ -102,7 +104,7 @@ ENV
 
     run grep -- "artisan migrate" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
-    run grep -- "-T app bash -c php bin/seed --demo" "$DOCKER_LOG"
+    run grep -- "-T app sh -c php bin/seed --demo" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -114,7 +116,7 @@ ENV
     [ "$status" -eq 0 ]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
-    [ "$output" = "DB_DATABASE=myapp_wt_feature-auth" ]
+    [ "$output" = "DB_DATABASE=myapp_wt_feature-auth-c0de" ]
 }
 
 @test "keeps .env on the worktree's database when the resolver prints something unexpected" {
@@ -126,13 +128,13 @@ ENV
     [[ "$output" == *"Could not create the development database"* ]]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
-    [ "$output" = "DB_DATABASE=myapp_wt_feature-auth" ]
+    [ "$output" = "DB_DATABASE=myapp_wt_feature-auth-c0de" ]
     run grep -- "artisan migrate" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
 
 @test "stays off when the setting is absent" {
-    sed -i.bak '/^WORKTREE_DEV_DB_PER_WORKTREE=/d' "$WORKTREE_DIR/.worktree-isolation.env"
+    sed -i.bak '/^WORKTREE_DEV_DB_PER_WORKTREE=/d' "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
@@ -144,7 +146,7 @@ ENV
 }
 
 @test "leaves .env alone when disabled" {
-    echo "WORKTREE_DEV_DB_PER_WORKTREE=false" >> "$WORKTREE_DIR/.worktree-isolation.env"
+    echo "WORKTREE_DEV_DB_PER_WORKTREE=false" >> "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
@@ -171,14 +173,16 @@ ENV
     [ "$status" -eq 0 ]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
-    [ "$output" = "DB_DATABASE=myapp_test_wt_feature-auth" ]
-    run grep -- "-e DB_DATABASE=myapp_test_wt_feature-auth .* php -r" "$DOCKER_LOG"
+    [ "$output" = "DB_DATABASE=myapp_test_wt_feature-auth-c0de" ]
+    run grep -- "-e DB_DATABASE=myapp_test_wt_feature-auth-c0de .* php -r" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
 
 @test "keeps .env.testing on the worktree's database when creating it fails" {
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
+[[ " \$* " != *" compose version "* ]] || echo 2.29.0
+[[ " \$* " != *" config --services"* ]] || echo app
 args="\$("$FAKE_BIN/docker-args" "\$@")"
 echo "\$args" >> "$DOCKER_LOG"
 [[ "\$args" != *"php -r"* ]]
@@ -189,7 +193,7 @@ SCRIPT
     [[ "$output" == *"vendor/bin/worktree test will create it on first run"* ]]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
-    [ "$output" = "DB_DATABASE=myapp_test_wt_feature-auth" ]
+    [ "$output" = "DB_DATABASE=myapp_test_wt_feature-auth-c0de" ]
 }
 
 @test "names the test database after the main checkout's .env, not the testing env file" {
@@ -199,7 +203,7 @@ SCRIPT
     [ "$status" -eq 0 ]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
-    [ "$output" = "DB_DATABASE=myapp_test_wt_feature-auth" ]
+    [ "$output" = "DB_DATABASE=myapp_test_wt_feature-auth-c0de" ]
 }
 
 @test "blanks .env when no safe development database name can be derived" {
@@ -228,11 +232,13 @@ SCRIPT
 }
 
 @test "waits for a Compose database that isn't accepting connections yet" {
-    sed -i.bak 's/^WORKTREE_DB_WAIT_SECONDS=.*/WORKTREE_DB_WAIT_SECONDS=10/' "$WORKTREE_DIR/.worktree-isolation.env"
+    sed -i.bak 's/^WORKTREE_DB_WAIT_SECONDS=.*/WORKTREE_DB_WAIT_SECONDS=10/' "$MAIN_REPO/.worktree-isolation.env"
     ATTEMPTS="$BATS_TEST_TMPDIR/attempts"
     echo 0 > "$ATTEMPTS"
     cat > "$FAKE_BIN/docker" <<SCRIPT
 #!/usr/bin/env bash
+[[ " \$* " != *" compose version "* ]] || echo 2.29.0
+[[ " \$* " != *" config --services"* ]] || echo app
 args="\$("$FAKE_BIN/docker-args" "\$@")"
 echo "\$args" >> "$DOCKER_LOG"
 if [[ "\$args" == *"php -r"* ]]; then
@@ -240,9 +246,9 @@ if [[ "\$args" == *"php -r"* ]]; then
     echo "\$n" > "$ATTEMPTS"
     (( n > 2 )) || exit 1
     if [[ "\$args" == *"DB_DATABASE=myapp_wt_"* ]]; then
-        echo "myapp_wt_feature-auth created"
+        echo "myapp_wt_feature-auth-c0de created"
     else
-        echo "myapp_test_wt_feature-auth created"
+        echo "myapp_test_wt_feature-auth-c0de created"
     fi
 fi
 exit 0
@@ -251,7 +257,7 @@ SCRIPT
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
     [[ "$output" != *"Could not create the test database"* ]]
-    run grep -- "-T app bash -c php artisan db:seed --no-interaction" "$DOCKER_LOG"
+    run grep -- "-T app sh -c php artisan db:seed --no-interaction" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -260,11 +266,11 @@ SCRIPT
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Using test database myapp_test_wt_feature-auth"* ]]
+    [[ "$output" == *"Using test database myapp_test_wt_feature-auth-c0de"* ]]
     [[ "$output" != *"not found"* ]]
     [ ! -e "$WORKTREE_DIR/.env.testing" ]
 
-    run grep -- "-e DB_DATABASE=myapp_test_wt_feature-auth -e DB_HOST=mysql .*-e DB_PASSWORD=secret app php -r" "$DOCKER_LOG"
+    run grep -- "-e DB_HOST=mysql .*-e DB_PASSWORD=secret .*-e DB_DATABASE=myapp_test_wt_feature-auth-c0de app php -r" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -274,4 +280,23 @@ SCRIPT
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
     [[ "$output" == *"so tests ignore this"* ]]
+}
+
+@test "passes a socket, TLS CA, charset and collation to database creation" {
+    printf 'DB_SOCKET=/run/mysqld/mysqld.sock\nDB_CHARSET=utf8mb4\nDB_COLLATION=utf8mb4_unicode_ci\nMYSQL_ATTR_SSL_CA=/ca.pem\n' >> "$WORKTREE_DIR/.env"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    run grep -- "-e DB_DATABASE=myapp_wt_feature-auth-c0de app php -r" "$DOCKER_LOG"
+    [[ "$output" == *"-e DB_SOCKET=/run/mysqld/mysqld.sock "* ]]
+    [[ "$output" == *"-e DB_CHARSET=utf8mb4 -e DB_COLLATION=utf8mb4_unicode_ci -e MYSQL_ATTR_SSL_CA=/ca.pem "* ]]
+}
+
+@test "records the worktree's databases for clean" {
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$MAIN_REPO/.git/worktree-isolation/databases/feature-auth")" = "$(printf 'development\tmyapp_wt_feature-auth-c0de\ntest\tmyapp_test_wt_feature-auth-c0de')" ]
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$(wc -l < "$MAIN_REPO/.git/worktree-isolation/databases/feature-auth")" -eq 2 ]
 }

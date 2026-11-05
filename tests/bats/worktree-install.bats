@@ -11,6 +11,8 @@ setup() {
     PROJECT_DIR="$BATS_TEST_TMPDIR/Bob's App"
     mkdir -p "$PROJECT_DIR"
     git -C "$PROJECT_DIR" init -q
+    # A Laravel project, unless a test removes it.
+    touch "$PROJECT_DIR/artisan"
 
     # Same git --version shim as worktree-install-compose.bats, overridable
     # per test via FAKE_GIT_VERSION.
@@ -60,11 +62,15 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction
 # WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction
 
-# Merged worktrees: report | ask | remove. Merged into origin's default branch
-# unless WORKTREE_PRUNE_BRANCH is set; setup checks after each new worktree.
-# WORKTREE_PRUNE=ask
+# Setup removes worktrees in the background whose branch is merged into
+# origin's default branch (or WORKTREE_PRUNE_BRANCH), or that have had no git
+# activity for WORKTREE_PRUNE_AFTER days (0: never). Branches are kept.
+# WORKTREE_PRUNE_AFTER=7
 # WORKTREE_PRUNE_BRANCH=develop
 # WORKTREE_PRUNE_ON_SETUP=true
+
+# Untracked files copied into each worktree, space-separated
+# WORKTREE_COPY_FILES="auth.json"
 
 # Command run at the end of setup, e.g. to build assets for tests
 # WORKTREE_POST_SETUP_COMMAND=npm run build
@@ -111,15 +117,108 @@ ENV
     [[ "$output" == *"--runtime requires a value"* ]]
 }
 
-@test "requires git 2.54 or newer" {
+@test "requires git 2.31 or newer" {
     FAKE_GIT_VERSION="git version 2.9.5" run run_install
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Git 2.54+ is required"*"You have Git 2.9."* ]]
+    [[ "$output" == *"Git 2.31+ is required. You have: git version 2.9.5."* ]]
     [ ! -f "$PROJECT_DIR/.worktree-isolation.env" ]
 
     FAKE_GIT_VERSION="git version 3.0.1" run run_install
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Git version: 3.0 (OK)"* ]]
+    [[ "$output" == *"Git version: 3.0.1 (OK)"* ]]
+}
+
+hook_file() {
+    echo "$PROJECT_DIR/.git/hooks/post-checkout"
+}
+
+@test "before git 2.54, installs a post-checkout hook file that keeps the project's own" {
+    mkdir -p "$PROJECT_DIR/.git/hooks"
+    printf '#!/usr/bin/env bash\necho "own hook $*" >> "%s/own.log"\n' "$BATS_TEST_TMPDIR" > "$(hook_file)"
+    chmod +x "$(hook_file)"
+
+    FAKE_GIT_VERSION="git version 2.39.2" run run_install
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Moved: your post-checkout hook to post-checkout.local"* ]]
+    run git -C "$PROJECT_DIR" config --local hook.worktree-setup.command
+    [ "$status" -ne 0 ]
+    grep -qF "bash '$STUBS_DIR/githooks/post-checkout-worktree-setup.sh' \"\$@\"" "$(hook_file)"
+
+    # Re-running doesn't move our own hook over the project's.
+    FAKE_GIT_VERSION="git version 2.39.2" run run_install --force
+    [ "$status" -eq 0 ]
+    grep -q "own hook" "$(hook_file).local"
+
+    # Both run; a file checkout (flag 0) makes ours a no-op.
+    run "$(hook_file)" a b 0
+    [ "$status" -eq 0 ]
+    [ "$(cat "$BATS_TEST_TMPDIR/own.log")" = "own hook a b 0" ]
+}
+
+@test "after a git upgrade, replaces the hook file with the config-based hook" {
+    mkdir -p "$PROJECT_DIR/.git/hooks"
+    echo "own" > "$(hook_file)"
+    FAKE_GIT_VERSION="git version 2.39.2" run run_install
+    [ "$status" -eq 0 ]
+
+    run run_install
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Removed: the post-checkout hook file"* ]]
+    [ "$(cat "$(hook_file)")" = own ]
+    [ ! -e "$(hook_file).local" ]
+    run git -C "$PROJECT_DIR" config --local hook.worktree-setup.command
+    [ "$status" -eq 0 ]
+}
+
+@test "before git 2.54, prints the hook line when core.hooksPath is set" {
+    git -C "$PROJECT_DIR" config core.hooksPath .husky
+
+    FAKE_GIT_VERSION="git version 2.39.2" run run_install
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"core.hooksPath is set"*"bash '$STUBS_DIR/githooks/post-checkout-worktree-setup.sh' \"\$@\""* ]]
+    [ ! -e "$(hook_file)" ]
+    [ ! -e "$PROJECT_DIR/.husky/post-checkout" ]
+}
+
+@test "without artisan, defaults to the project's test runner and no migrate or seed command" {
+    rm "$PROJECT_DIR/artisan"
+
+    run run_install
+    [ "$status" -eq 0 ]
+    grep -qx "WORKTREE_TEST_COMMAND=php vendor/bin/phpunit" "$PROJECT_DIR/.worktree-isolation.env"
+    grep -qx "WORKTREE_DEV_DB_MIGRATE_COMMAND=" "$PROJECT_DIR/.worktree-isolation.env"
+    grep -qx "WORKTREE_DEV_DB_SEED_COMMAND=" "$PROJECT_DIR/.worktree-isolation.env"
+
+    mkdir -p "$PROJECT_DIR/vendor/bin" && touch "$PROJECT_DIR/vendor/bin/pest"
+    run run_install --force
+    grep -qx "WORKTREE_TEST_COMMAND=php vendor/bin/pest" "$PROJECT_DIR/.worktree-isolation.env"
+}
+
+@test "with a compose file and no PHP on the host, defaults to the docker-compose runtime" {
+    rm "$FAKE_BIN/php"
+    nophp="$BATS_TEST_TMPDIR/nophp"
+    mkdir -p "$nophp"
+    for tool in bash git env sed grep cat dirname basename id tr cut mktemp awk readlink pwd head mkdir uname printf od mv; do
+        [[ ! -e "$(command -v "$tool")" ]] || ln -sf "$(command -v "$tool")" "$nophp/$tool"
+    done
+    ln -sf "$FAKE_BIN/git" "$nophp/git"
+    touch "$PROJECT_DIR/compose.yaml"
+
+    PATH="$nophp" run run_install
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"no PHP on the host: using the docker-compose runtime (service: app"* ]]
+    grep -qx "WORKTREE_RUNTIME=docker-compose" "$PROJECT_DIR/.worktree-isolation.env"
+}
+
+@test "writes the config to the main checkout when run in a worktree" {
+    git -C "$PROJECT_DIR" -c user.email=t@example.com -c user.name=T commit -q --allow-empty -m init
+    git -C "$PROJECT_DIR" worktree add -q -b wt "$BATS_TEST_TMPDIR/wt"
+    cd "$BATS_TEST_TMPDIR/wt"
+
+    run bash "$STUBS_DIR/bin/worktree-install" --stubs-dir="$STUBS_DIR"
+    [ "$status" -eq 0 ]
+    [ -f "$PROJECT_DIR/.worktree-isolation.env" ]
+    [ ! -e "$BATS_TEST_TMPDIR/wt/.worktree-isolation.env" ]
 }
 
 @test "only suggests brew for upgrading git on macOS" {
