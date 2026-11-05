@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0](https://github.com/anthonyiles/worktree-isolation/compare/v0.7.0...v0.8.0) (2026-11-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* per-worktree database and Compose project names change, so existing worktrees get new ones (re-run vendor/bin/worktree setup). Databases created before this aren't recorded, so clean won't drop them. The artisan commands, the PHP classes and WORKTREE_PRUNE are removed, and .worktree-isolation.env is read from the main checkout only.
+
+### Features
+
+* give docker-image containers their compose service's environment ([3299613](https://github.com/anthonyiles/worktree-isolation/commit/3299613ae854bb43230e6e6df166e0b6df938d40))
+* let vendor/bin/worktree run commands in the main checkout ([92af138](https://github.com/anthonyiles/worktree-isolation/commit/92af138970b19149dfeb272f3d0e7c09783e7ad6))
+* pass WORKTREE_DOCKER_ENV to docker-image containers ([119f75c](https://github.com/anthonyiles/worktree-isolation/commit/119f75c470b769f355c17b39b22a64de2f10a1eb))
+* safer, simpler worktree isolation in bash ([b2c238b](https://github.com/anthonyiles/worktree-isolation/commit/b2c238b5c8727a4a2eb63de7960a2434d20942a6))
+
 ## [0.7.0](https://github.com/anthonyiles/worktree-isolation/compare/v0.6.0...v0.7.0) (2026-11-04)
 
 

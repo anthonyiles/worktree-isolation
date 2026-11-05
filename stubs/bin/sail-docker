@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+#
+# Stands in for `docker` when Sail runs in a docker-image worktree. Setup
+# points SAIL_DOCKER_BINARY (read by laravel/sail 1.55+) at this file in the
+# worktree's .env, so an unchanged `vendor/bin/sail pint --dirty`, e.g. in a
+# project's git hook, runs in a throwaway container with the worktree mounted,
+# as `vendor/bin/worktree php vendor/bin/pint --dirty` would.
+#
+# Sail reaches its app container with `docker compose exec`, but a
+# docker-image worktree has no running containers, so this answers Sail's
+# `compose ps` checks itself and runs the exec'd command through passthrough.
+# Every other docker call goes to the real docker, as does everything outside
+# a docker-image worktree (e.g. a .env left over from another runtime).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/_worktree-lib.sh"
+
+load_worktree_config
+if [[ "${1:-}" != compose || "$RUNTIME" != docker-image ]] || in_main_checkout; then
+    exec docker "$@"
+fi
+shift
+APP_SERVICE="${APP_SERVICE:-laravel.test}"
+
+unsupported() {
+    echo "Error: this worktree has no Sail containers (WORKTREE_RUNTIME=docker-image), so sail only runs commands in $APP_SERVICE here." >&2
+    echo "  Run other sail commands in the main checkout." >&2
+    exit 1
+}
+
+# Sail checks that `docker compose` works before using it.
+[[ $# -gt 0 ]] || exit 0
+
+# Compose's own options come first (Sail adds -f for SAIL_FILES).
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f|--file|-p|--project-name|--project-directory|--env-file) shift 2 ;;
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+
+case "${1:-}" in
+    ps)
+        # Sail runs commands when `ps -q` prints a container, and shuts the
+        # stack down when `ps <service>` mentions an exited one.
+        [[ " $* " != *" -q "* ]] || echo worktree-isolation
+        exit 0
+        ;;
+    exec)
+        shift
+        ;;
+    *)
+        unsupported
+        ;;
+esac
+
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -e|--env) ARGS+=(-e "$2"); shift 2 ;;
+        # Sail's own user (-u sail) becomes the host user, as for passthrough.
+        -u|--user) [[ "$2" != root && "$2" != 0 ]] || ARGS+=(--root); shift 2 ;;
+        -T|--no-TTY) ARGS+=(-T); shift ;;
+        -w|--workdir|--index) shift 2 ;;
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+[[ $# -ge 2 && "$1" == "$APP_SERVICE" ]] || unsupported
+shift
+
+validate_runtime
+exec_in_docker_image ${ARGS[@]+"${ARGS[@]}"} -- "$@"

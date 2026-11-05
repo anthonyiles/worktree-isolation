@@ -189,8 +189,11 @@ validate_runtime() {
 # Fills COMPOSE_FILES with the absolute paths of the compose files Compose
 # would use in DIR: WORKTREE_COMPOSE_FILE, else COMPOSE_FILE (from the
 # environment or DIR/.env), else the first default file and its override.
+# Leaves out this worktree's override file, which setup adds to its .env's
+# COMPOSE_FILE (see point_compose_at_worktree_stack).
 find_compose_files() {
-    local dir="$1" file value i
+    local dir="$1" file value files=() override=""
+    [[ -z "${CHECKOUT_GIT_DIR:-}" ]] || override="$(compose_override_file)"
     COMPOSE_FILES=()
     value="${COMPOSE_FILE:-$(env_file_value "$dir/.env" COMPOSE_FILE)}"
     if [[ -n "${WORKTREE_COMPOSE_FILE:-}" ]]; then
@@ -205,9 +208,11 @@ find_compose_files() {
             [[ ${#COMPOSE_FILES[@]} -gt 0 && -f "$dir/$file" ]] && COMPOSE_FILES+=("$file") && break
         done
     fi
-    for ((i = 0; i < ${#COMPOSE_FILES[@]}; i++)); do
-        [[ "${COMPOSE_FILES[i]}" == /* ]] || COMPOSE_FILES[i]="$dir/${COMPOSE_FILES[i]}"
+    for file in ${COMPOSE_FILES[@]+"${COMPOSE_FILES[@]}"}; do
+        [[ "$file" == /* ]] || file="$dir/$file"
+        [[ "$file" == "$override" ]] || files+=("$file")
     done
+    COMPOSE_FILES=(${files[@]+"${files[@]}"})
 }
 
 # Kept in the worktree's own git dir, out of the working tree.
@@ -243,6 +248,30 @@ write_compose_override() {
     } > "$override"
     COMPOSE_ARGS+=(-f "$override")
     COMPOSE_EXEC_ARGS=("${COMPOSE_ARGS[@]}" exec "${CONTAINER_USER_ARGS[@]}" "${CONTAINER_ENV[@]}")
+}
+
+# Usage: point_compose_at_worktree_stack ENV_FILE
+# Writes the worktree stack's project name and compose files into its .env,
+# which Compose reads from the directory it runs in. A plain `docker compose
+# exec` or `sail`, e.g. in a project's git hook, then reaches this worktree's
+# stack rather than the main checkout's, or none. Sail passes SAIL_FILES as
+# -f, which beats COMPOSE_FILE, so a SAIL_FILES gets the same files.
+point_compose_at_worktree_stack() {
+    local env_file="$1" files=() value
+    set_env_file_value "$env_file" COMPOSE_PROJECT_NAME "$COMPOSE_PROJECT_NAME"
+    [[ ${#COMPOSE_FILES[@]} -gt 0 ]] || return 0
+    files=("${COMPOSE_FILES[@]}")
+    [[ ! -f "$(compose_override_file)" ]] || files+=("$(compose_override_file)")
+
+    value="$(IFS="${COMPOSE_PATH_SEPARATOR:-:}" && echo "${files[*]}")"
+    [[ "$value" != *[[:space:]]* ]] || value="\"$value\""
+    set_env_file_value "$env_file" COMPOSE_FILE "$value"
+
+    if [[ -n "$(env_file_value "$env_file" SAIL_FILES)" ]]; then
+        value="$(IFS=: && echo "${files[*]}")"
+        [[ "$value" != *[[:space:]]* ]] || value="\"$value\""
+        set_env_file_value "$env_file" SAIL_FILES "$value"
+    fi
 }
 
 # Double-quotes a YAML string, escaping $ from Compose's interpolation too.
@@ -989,6 +1018,37 @@ build_docker_image_args() {
     fi
 }
 
+# Usage: exec_in_docker_image [-e KEY[=value]]... [-T] [--root] -- command [args...]
+# Replaces this process with command run in a throwaway container of the
+# image, the way passthrough runs it. -e values are exported and passed by
+# name, as run_in_runtime does. -T never allocates a TTY; otherwise one is
+# allocated when stdin and stdout are terminals. --root runs as root rather
+# than the host user.
+exec_in_docker_image() {
+    local pairs=() pair tty=true
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -e) pairs+=("$2"); shift 2 ;;
+            -T) tty=false; shift ;;
+            --root) CONTAINER_USER_ARGS=(-u root); shift ;;
+            --) shift; break ;;
+            *) break ;;
+        esac
+    done
+
+    build_docker_image_args
+    for pair in ${pairs[@]+"${pairs[@]}"}; do
+        [[ "$pair" != *=* ]] || export "${pair?}"
+        DOCKER_ARGS+=(-e "${pair%%=*}")
+    done
+    DOCKER_ARGS+=(-i)
+    [[ "$tty" == true && -t 0 && -t 1 ]] && DOCKER_ARGS+=(-t)
+
+    # Overriding --entrypoint with the command's first token is the same
+    # pattern run_in_runtime uses (--entrypoint composer, --entrypoint npm).
+    exec "${DOCKER_ARGS[@]}" --entrypoint "$1" "$IMAGE" "${@:2}"
+}
+
 # Prints the key of every assignment in a dotenv file, once each.
 env_file_keys() {
     local line seen=" "
@@ -1109,14 +1169,38 @@ set_env_file_value() {
 }
 
 
-# Usage: warn_about_hooks_calling_sail DIR
+# Usage: sail_docker_binary_usable DIR SAIL_DOCKER
+# Whether the checkout's Sail runs docker through SAIL_DOCKER_BINARY (1.55+),
+# so setup can point it at SAIL_DOCKER (stubs/bin/sail-docker). Sail expands
+# the setting unquoted, so the path can't contain whitespace.
+sail_docker_binary_usable() {
+    [[ -n "$2" && "$2" != *[[:space:]]* ]] && grep -qs SAIL_DOCKER_BINARY "$1/vendor/laravel/sail/bin/sail"
+}
+
+# Usage: warn_about_hooks_calling_sail DIR RUNTIME SAIL_DOCKER
 # The project's own git hooks run in worktrees too, where `sail` and `docker
-# compose exec` reach the main checkout's container, so e.g. a pre-commit
-# pint --dirty formats the main checkout's files. Checks hook.*.command and
-# the hooks directory (core.hooksPath, and husky's scripts above .husky/_).
-# Hooks that mention vendor/bin/worktree are assumed to handle worktrees.
+# compose exec` reach the main checkout's container, or none, so e.g. a
+# pre-commit pint --dirty formats the main checkout's files. Setup points
+# both at a docker-compose worktree's own stack, and Sail 1.55+ at
+# SAIL_DOCKER in a docker-image worktree, so only the rest is flagged.
+# Checks hook.*.command and the hooks directory (core.hooksPath, and husky's
+# scripts above .husky/_). Hooks that mention vendor/bin/worktree are assumed
+# to handle worktrees.
 warn_about_hooks_calling_sail() {
-    local pattern='(^|[[:space:];&|(/])sail[[:space:]]|docker[ -]compose[^;&|]*[[:space:]](exec|run)[[:space:]]'
+    local sail='(^|[[:space:];&|(/])sail[[:space:]]' compose='docker[ -]compose[^;&|]*[[:space:]](exec|run)[[:space:]]'
+    local pattern="$sail|$compose" old_sail=false
+    case "$2" in
+        docker-compose)
+            return 0
+            ;;
+        docker-image)
+            if sail_docker_binary_usable "$1" "$3"; then
+                pattern="$compose"
+            elif [[ -f "$1/vendor/laravel/sail/bin/sail" ]]; then
+                old_sail=true
+            fi
+            ;;
+    esac
     local found=() line hooks_dir hook_dirs=() dir file
     while IFS= read -r line; do
         if [[ "$line" != hook.worktree-setup.command* && "$line" =~ $pattern && "$line" != *vendor/bin/worktree* ]]; then
@@ -1138,8 +1222,9 @@ warn_about_hooks_calling_sail() {
     done
 
     if [[ ${#found[@]} -gt 0 ]]; then
-        echo "Warning: these git hooks call sail or docker compose, which in a worktree run in the main checkout's container:" >&2
+        echo "Warning: these git hooks call sail or docker compose, which in a worktree reach the main checkout's container, or none:" >&2
         printf '  %s\n' "${found[@]}" >&2
+        [[ "$old_sail" == false ]] || echo "  With laravel/sail 1.55+, sail runs in worktrees unchanged." >&2
         echo "  Run those commands through vendor/bin/worktree instead. To use it in the main checkout too, set WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true." >&2
     fi
 }

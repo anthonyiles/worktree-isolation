@@ -532,7 +532,8 @@ create_env_config
 
 # 3. Configure git hooks, and check the project's own
 configure_git_hooks
-warn_about_hooks_calling_sail "$PROJECT_DIR"
+warn_about_hooks_calling_sail "$PROJECT_DIR" \
+    "$(env_file_value "$PROJECT_DIR/.worktree-isolation.env" WORKTREE_RUNTIME)" "$STUBS_DIR/bin/sail-docker"
 
 # 4. Optionally tell AI agents to go through vendor/bin/worktree
 if [[ "$AGENTS" == true ]]; then

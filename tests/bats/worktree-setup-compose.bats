@@ -72,7 +72,7 @@ setup() {
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
-    [ "$(cat "$relative_dir/.env")" = "APP_NAME=main" ]
+    [ "$(head -n 1 "$relative_dir/.env")" = "APP_NAME=main" ]
 }
 
 @test "does nothing in the main checkout" {
@@ -265,6 +265,7 @@ SCRIPT
 }
 
 @test "warns about project git hooks that call sail or docker compose" {
+    printf 'WORKTREE_RUNTIME=docker-image\nWORKTREE_DOCKER_IMAGE=myapp:latest\nWORKTREE_PRUNE_ON_SETUP=false\n' > "$MAIN_REPO/.worktree-isolation.env"
     git config hook.pint.command "vendor/bin/sail php vendor/bin/pint --dirty"
     git config hook.pint.event pre-commit
     git config hook.ok.command "vendor/bin/pint --dirty"
