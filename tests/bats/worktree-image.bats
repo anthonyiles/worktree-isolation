@@ -40,7 +40,7 @@ ENV
 
     output="$(cat "$DOCKER_LOG")"
     [[ "$output" == *"-e APP_ENV=testing"* ]]
-    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth-c0de"* ]]
+    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth-c0de_test"* ]]
 }
 
 @test "passthrough and test run as the host user so the worktree's files stay owned by it" {

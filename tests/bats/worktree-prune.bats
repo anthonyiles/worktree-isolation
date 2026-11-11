@@ -212,8 +212,8 @@ prune() {
     merge_and_push merged
     add_worktree open
     mkdir -p .git/worktree-isolation/databases
-    printf 'test\ttesting_wt_merged-c0de\ndevelopment\tmyapp_wt_merged-c0de\n' > .git/worktree-isolation/databases/merged
-    printf 'test\ttesting_wt_open-c0de\n' > .git/worktree-isolation/databases/open
+    printf 'test\ttesting_wt_merged-c0de_test\ndevelopment\tmyapp_wt_merged-c0de\n' > .git/worktree-isolation/databases/merged
+    printf 'test\ttesting_wt_open-c0de_test\n' > .git/worktree-isolation/databases/open
     printf 'DB_CONNECTION=mysql\nDB_DATABASE=myapp\nDB_HOST=db\n' > .env
     FAKE_BIN="$BATS_TEST_TMPDIR/fakebin"
     mkdir -p "$FAKE_BIN"
@@ -226,8 +226,8 @@ SCRIPT
 
     PATH="$FAKE_BIN:$PATH" run prune --force
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Dropped: testing_wt_merged-c0de"*"Dropped: myapp_wt_merged-c0de"* ]]
-    [ "$(cat "$BATS_TEST_TMPDIR/php.log")" = "db testing_wt_merged-c0de
+    [[ "$output" == *"Dropped: testing_wt_merged-c0de_test"*"Dropped: myapp_wt_merged-c0de"* ]]
+    [ "$(cat "$BATS_TEST_TMPDIR/php.log")" = "db testing_wt_merged-c0de_test
 db myapp_wt_merged-c0de" ]
     [ ! -e .git/worktree-isolation/databases/merged ]
     [ -e .git/worktree-isolation/databases/open ]

@@ -299,7 +299,8 @@ main_test_database() {
 }
 
 # Worktrees' test databases are named after the main checkout's development
-# database, "{name}_test_wt_{worktree}", so no testing env file is needed.
+# database, "{name}_wt_{worktree}_test", so no testing env file is needed,
+# and sort next to the worktree's development database.
 # The name is cut to 16 bytes to leave the worktree room within 40. Falls
 # back to "testing" when .env has no MySQL/MariaDB database.
 test_database_base() {
@@ -313,11 +314,7 @@ test_database_base() {
             name="${name%?}"
         done
     fi
-    if [[ -n "$name" ]]; then
-        echo "${name}_test"
-    else
-        echo testing
-    fi
+    echo "${name:-testing}"
 }
 
 # Per-worktree test databases apply when the tests use MySQL/MariaDB.
@@ -504,13 +501,12 @@ derive_dev_database_name() {
     derive_worktree_database_name "$1" "$2" 64
 }
 
-# The "test" check runs on the base: a worktree named e.g. "test-refactor"
-# must not make a non-test base pass. Capped at 40 characters: MySQL
-# rejected longer test database names.
+# Capped at 40 characters, "_test" included: MySQL rejected longer test
+# database names.
 derive_test_database_name() {
-    local base="${1%%_wt_*}"
-    [[ "$(printf '%s' "$base" | LC_ALL=C tr '[:upper:]' '[:lower:]')" == *test* ]] || return 1
-    derive_worktree_database_name "$base" "$2" 40
+    local name
+    name="$(derive_worktree_database_name "$1" "$2" 35)" || return 1
+    echo "${name}_test"
 }
 
 # Fills WT_PATHS, WT_IDS, WT_BRANCHES and WT_STATES from `git worktree list`,
@@ -773,16 +769,13 @@ normalize_path() {
 # docker run lacks (Sail's laravel.test: LARAVEL_SAIL, XDEBUG_MODE, and
 # whatever the project adds). Compose resolves it against this checkout's own
 # .env, so it follows the compose file and never lands in the committed
-# config. WORKTREE_DOCKER_SERVICE names the service; unset, it's the one using
-# the image, and empty turns this off. Fills SERVICE_ENV with KEY=value pairs.
+# config. WORKTREE_DOCKER_SERVICE names the service; empty, it's the one using
+# the image. Fills SERVICE_ENV with KEY=value pairs.
 # The result is cached in the checkout's git dir until the compose files or
 # .env change, since `docker compose config` is slow to run on every command.
 load_service_env() {
     SERVICE_ENV=()
-    local service="${WORKTREE_DOCKER_SERVICE-}" args=(docker compose) cache key config lines line value file
-    if [[ -n "${WORKTREE_DOCKER_SERVICE+set}" && -z "$service" ]]; then
-        return 0
-    fi
+    local service="${WORKTREE_DOCKER_SERVICE:-}" args=(docker compose) cache key config lines line value file
     find_compose_files "$PROJECT_ROOT"
     if [[ ${#COMPOSE_FILES[@]} -eq 0 ]]; then
         [[ -z "$service" ]] || echo "Warning: no compose file, so containers don't get the $service service's environment." >&2
@@ -1025,9 +1018,8 @@ run_in_runtime() (
 # unquoted one loses a trailing " # comment" and surrounding whitespace.
 # Sets PARSED_VALUE rather than printing it, to save a subshell per line.
 parse_env_value() {
-    local value="$1"
-    value="${value%$'\r'}"
-    value="${value#"${value%%[![:space:]]*}"}"
+    local raw="${1%$'\r'}" value
+    value="${raw#"${raw%%[![:space:]]*}"}"
     case "$value" in
         \"*)
             value="${value#\"}"
@@ -1038,7 +1030,9 @@ parse_env_value() {
             value="${value%%\'*}"
             ;;
         *)
-            value="${value%%[[:space:]]#*}"
+            # From the raw value, so "KEY=   # comment" is empty.
+            value="${raw%%[[:space:]]#*}"
+            value="${value#"${value%%[![:space:]]*}"}"
             value="${value%"${value##*[![:space:]]}"}"
             ;;
     esac
