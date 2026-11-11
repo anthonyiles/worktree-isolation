@@ -7,7 +7,7 @@ load helpers
 
 setup() {
     setup_docker_compose_worktree
-    printf 'WORKTREE_RUNTIME=docker-image\nWORKTREE_DOCKER_IMAGE=sail-8.4/app\n' > "$MAIN_REPO/.worktree-isolation.env"
+    printf 'WORKTREE_RUNTIME=docker-image\nWORKTREE_DOCKER_IMAGE=sail-8.4/app\nWORKTREE_PRUNE_ON_SETUP=false\n' > "$MAIN_REPO/.worktree-isolation.env"
     touch "$WORKTREE_DIR/docker-compose.yml"
 
     export FAKE_COMPOSE_CONFIG="$BATS_TEST_TMPDIR/compose-config.yml"
@@ -85,8 +85,9 @@ docker_run_log() {
     run grep -c -- "-e PHPSTAN_MAX_PROCESSES=4 " "$DOCKER_LOG"
     [ "$output" -eq 1 ]
 
-    sleep 1
-    touch docker-compose.yml
+    # A fixed future time rather than a sleep, so a clock step can't keep
+    # the compose file from looking newer than the cache.
+    touch -t 209901010000 docker-compose.yml
     : > "$DOCKER_LOG"
     run bash "$STUBS_DIR/worktree" php -v
     [ "$status" -eq 0 ]
