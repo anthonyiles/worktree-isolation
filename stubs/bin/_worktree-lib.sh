@@ -1021,9 +1021,8 @@ run_in_runtime() (
 # unquoted one loses a trailing " # comment" and surrounding whitespace.
 # Sets PARSED_VALUE rather than printing it, to save a subshell per line.
 parse_env_value() {
-    local value="$1"
-    value="${value%$'\r'}"
-    value="${value#"${value%%[![:space:]]*}"}"
+    local raw="${1%$'\r'}" value
+    value="${raw#"${raw%%[![:space:]]*}"}"
     case "$value" in
         \"*)
             value="${value#\"}"
@@ -1034,7 +1033,9 @@ parse_env_value() {
             value="${value%%\'*}"
             ;;
         *)
-            value="${value%%[[:space:]]#*}"
+            # From the raw value, so "KEY=   # comment" is empty.
+            value="${raw%%[[:space:]]#*}"
+            value="${value#"${value%%[![:space:]]*}"}"
             value="${value%"${value##*[![:space:]]}"}"
             ;;
     esac

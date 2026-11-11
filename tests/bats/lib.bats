@@ -111,6 +111,8 @@ setup() {
     file="$BATS_TEST_TMPDIR/.env"
     printf '%s\n' \
         'APP_NAME=My App # trailing comment' \
+        'APP_URL=   # only a comment' \
+        'APP_KEY=#not-a-comment' \
         'export DB_HOST = mysql' \
         'DB_PASSWORD="p@ss #not a comment"' \
         "DB_USERNAME='\$(touch $BATS_TEST_TMPDIR/pwned)'" \
@@ -118,6 +120,8 @@ setup() {
     printf 'DB_DATABASE=crlf\r\n' >> "$file"
 
     [ "$(env_file_value "$file" APP_NAME)" = "My App" ]
+    [ "$(env_file_value "$file" APP_URL)" = "" ]
+    [ "$(env_file_value "$file" APP_KEY)" = "#not-a-comment" ]
     [ "$(env_file_value "$file" DB_HOST)" = "mysql" ]
     [ "$(env_file_value "$file" DB_PASSWORD)" = "p@ss #not a comment" ]
     [ "$(env_file_value "$file" DB_USERNAME)" = "\$(touch $BATS_TEST_TMPDIR/pwned)" ]
