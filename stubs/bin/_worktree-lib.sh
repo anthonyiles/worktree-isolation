@@ -769,16 +769,13 @@ normalize_path() {
 # docker run lacks (Sail's laravel.test: LARAVEL_SAIL, XDEBUG_MODE, and
 # whatever the project adds). Compose resolves it against this checkout's own
 # .env, so it follows the compose file and never lands in the committed
-# config. WORKTREE_DOCKER_SERVICE names the service; unset, it's the one using
-# the image, and empty turns this off. Fills SERVICE_ENV with KEY=value pairs.
+# config. WORKTREE_DOCKER_SERVICE names the service; empty, it's the one using
+# the image. Fills SERVICE_ENV with KEY=value pairs.
 # The result is cached in the checkout's git dir until the compose files or
 # .env change, since `docker compose config` is slow to run on every command.
 load_service_env() {
     SERVICE_ENV=()
-    local service="${WORKTREE_DOCKER_SERVICE-}" args=(docker compose) cache key config lines line value file
-    if [[ -n "${WORKTREE_DOCKER_SERVICE+set}" && -z "$service" ]]; then
-        return 0
-    fi
+    local service="${WORKTREE_DOCKER_SERVICE:-}" args=(docker compose) cache key config lines line value file
     find_compose_files "$PROJECT_ROOT"
     if [[ ${#COMPOSE_FILES[@]} -eq 0 ]]; then
         [[ -z "$service" ]] || echo "Warning: no compose file, so containers don't get the $service service's environment." >&2

@@ -135,15 +135,13 @@ docker_run_log() {
     [[ "$output" != *"LARAVEL_SAIL"* ]]
 }
 
-@test "an empty WORKTREE_DOCKER_SERVICE turns it off" {
+@test "an empty WORKTREE_DOCKER_SERVICE uses the service using the image" {
     echo "WORKTREE_DOCKER_SERVICE=" >> "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/worktree" php -v
     [ "$status" -eq 0 ]
-    run grep -- "compose config" "$DOCKER_LOG"
-    [ "$status" -ne 0 ]
     run docker_run_log
-    [[ "$output" != *"LARAVEL_SAIL"* ]]
+    [[ "$output" == *"LARAVEL_SAIL"* ]]
 }
 
 @test "warns about a WORKTREE_DOCKER_SERVICE that isn't in the compose file" {
