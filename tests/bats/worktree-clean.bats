@@ -122,6 +122,6 @@ devhost myapp_wt_gone-c0de" ]
 
     run clean --force
     [ "$status" -eq 0 ]
-    [ "$(cat "$PHP_LOG")" = "pgsql pghost myapp_test_wt_gone-c0de
+    [ "$(cat "$PHP_LOG")" = "pgsql pghost myapp_wt_gone-c0de_test
 pgsql pghost myapp_wt_gone-c0de" ]
 }

@@ -308,11 +308,11 @@ SCRIPT
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Using test database myapp_test_wt_feature-auth-c0de"* ]]
+    [[ "$output" == *"Using test database myapp_wt_feature-auth-c0de_test"* ]]
     [[ "$output" == *"Using DB_DATABASE=myapp_wt_feature-auth-c0de in .env"* ]]
     run grep -- "-e DB_CONNECTION=pgsql .*-e DB_SSLMODE=require .*-e DB_DATABASE=myapp_wt_feature-auth-c0de app php -r" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
-    run grep -- "-e DB_CONNECTION=pgsql .*-e DB_DATABASE=myapp_test_wt_feature-auth-c0de app php -r" "$DOCKER_LOG"
+    run grep -- "-e DB_CONNECTION=pgsql .*-e DB_DATABASE=myapp_wt_feature-auth-c0de_test app php -r" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
     run grep -- "artisan migrate" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
