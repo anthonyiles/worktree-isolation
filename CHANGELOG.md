@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.10.0](https://github.com/anthonyiles/worktree-isolation/compare/v0.9.0...v0.10.0) (2026-11-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* WORKTREE_DOCKER_SERVICE= no longer turns off the compose service's environment for docker-image containers; empty now means the default. Override single values with WORKTREE_DOCKER_ENV instead.
+
+### Features
+
+* an empty WORKTREE_DOCKER_SERVICE uses the service using the image ([a828658](https://github.com/anthonyiles/worktree-isolation/commit/a8286583816d305011f481dc2e56d8b9867e73ea))
+* make the commented-out settings in .worktree-isolation.env match the defaults, so uncommenting one changes nothing ([ac09eea](https://github.com/anthonyiles/worktree-isolation/commit/ac09eea930243d864bd4aebe57ee4abe0fbc3af8))
+* name worktree test databases {name}_wt_{worktree}_test, next to their development database ([73b1248](https://github.com/anthonyiles/worktree-isolation/commit/73b12486d3d5d5218934eab0e2d9a3a48b653059))
+* test databases sort next to their worktree's dev database, and safe-to-uncomment config defaults ([#42](https://github.com/anthonyiles/worktree-isolation/issues/42)) ([6d37f42](https://github.com/anthonyiles/worktree-isolation/commit/6d37f424d662775aba080493b6fafc33cd0f8368))
+
+
+### Bug Fixes
+
+* keep an apostrophe out of the install config, which broke the tests on Bash 3.2 ([e237f51](https://github.com/anthonyiles/worktree-isolation/commit/e237f515b484bd61d5f0d754976126616a6fd544))
+* read "KEY=   # comment" in env files as empty, not as the comment ([a272fce](https://github.com/anthonyiles/worktree-isolation/commit/a272fceda4b5656d36bb164d15ac556326f0cc74))
+
 ## [0.9.0](https://github.com/anthonyiles/worktree-isolation/compare/v0.8.0...v0.9.0) (2026-11-05)
 
 
