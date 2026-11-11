@@ -7,7 +7,7 @@ load helpers
 
 setup() {
     setup_docker_compose_worktree
-    printf 'WORKTREE_RUNTIME=docker-image\nWORKTREE_DOCKER_IMAGE=sail-8.4/app\n' > "$MAIN_REPO/.worktree-isolation.env"
+    printf 'WORKTREE_RUNTIME=docker-image\nWORKTREE_DOCKER_IMAGE=sail-8.4/app\nWORKTREE_PRUNE_ON_SETUP=false\n' > "$MAIN_REPO/.worktree-isolation.env"
     touch "$WORKTREE_DIR/docker-compose.yml"
 
     export FAKE_COMPOSE_CONFIG="$BATS_TEST_TMPDIR/compose-config.yml"
@@ -85,8 +85,9 @@ docker_run_log() {
     run grep -c -- "-e PHPSTAN_MAX_PROCESSES=4 " "$DOCKER_LOG"
     [ "$output" -eq 1 ]
 
-    sleep 1
-    touch docker-compose.yml
+    # A fixed future time rather than a sleep, so a clock step can't keep
+    # the compose file from looking newer than the cache.
+    touch -t 209901010000 docker-compose.yml
     : > "$DOCKER_LOG"
     run bash "$STUBS_DIR/worktree" php -v
     [ "$status" -eq 0 ]
@@ -120,7 +121,7 @@ docker_run_log() {
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
     output="$(cat "$DOCKER_LOG")"
-    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth-c0de"* ]]
+    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth-c0de_test"* ]]
     [[ "$output" != *"DB_DATABASE=other"* ]]
     [[ "$output" != *"DB_DATABASE=fromservice"* ]]
 }
@@ -135,15 +136,13 @@ docker_run_log() {
     [[ "$output" != *"LARAVEL_SAIL"* ]]
 }
 
-@test "an empty WORKTREE_DOCKER_SERVICE turns it off" {
+@test "an empty WORKTREE_DOCKER_SERVICE uses the service using the image" {
     echo "WORKTREE_DOCKER_SERVICE=" >> "$MAIN_REPO/.worktree-isolation.env"
 
     run bash "$STUBS_DIR/worktree" php -v
     [ "$status" -eq 0 ]
-    run grep -- "compose config" "$DOCKER_LOG"
-    [ "$status" -ne 0 ]
     run docker_run_log
-    [[ "$output" != *"LARAVEL_SAIL"* ]]
+    [[ "$output" == *"LARAVEL_SAIL"* ]]
 }
 
 @test "warns about a WORKTREE_DOCKER_SERVICE that isn't in the compose file" {

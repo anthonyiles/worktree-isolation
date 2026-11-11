@@ -20,8 +20,8 @@ setup() {
 
     LEDGER="$MAIN_REPO/.git/worktree-isolation/databases"
     mkdir -p "$LEDGER"
-    printf 'test\tmyapp_test_wt_gone-c0de\ndevelopment\tmyapp_wt_gone-c0de\n' > "$LEDGER/gone"
-    printf 'test\tmyapp_test_wt_live-c0de\n' > "$LEDGER/live"
+    printf 'test\tmyapp_wt_gone-c0de_test\ndevelopment\tmyapp_wt_gone-c0de\n' > "$LEDGER/gone"
+    printf 'test\tmyapp_wt_live-c0de_test\n' > "$LEDGER/live"
 
     FAKE_BIN="$BATS_TEST_TMPDIR/fakebin"
     mkdir -p "$FAKE_BIN"
@@ -41,7 +41,7 @@ clean() {
 @test "drops only the databases of worktrees that no longer exist" {
     run clean --force
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Dropped: myapp_test_wt_gone-c0de"*"Dropped: myapp_wt_gone-c0de"* ]]
+    [[ "$output" == *"Dropped: myapp_wt_gone-c0de_test"*"Dropped: myapp_wt_gone-c0de"* ]]
     [[ "$output" != *"live"* ]]
     [ ! -e "$LEDGER/gone" ]
     [ -e "$LEDGER/live" ]
@@ -52,14 +52,14 @@ clean() {
 
     run clean --force
     [ "$status" -eq 0 ]
-    [ "$(cat "$PHP_LOG")" = "testhost myapp_test_wt_gone-c0de
+    [ "$(cat "$PHP_LOG")" = "testhost myapp_wt_gone-c0de_test
 devhost myapp_wt_gone-c0de" ]
 }
 
 @test "--all drops existing worktrees' databases too" {
     run clean --all --force
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Dropped: myapp_test_wt_live-c0de"* ]]
+    [[ "$output" == *"Dropped: myapp_wt_live-c0de_test"* ]]
     [ ! -e "$LEDGER/live" ]
 }
 

@@ -39,7 +39,7 @@ if [[ "\$args" == *"DB_DATABASE=myapp_wt_"*"php -r"* ]]; then
     printf '%s' "$DEV_DB_NOISE"
     echo "myapp_wt_feature-auth-c0de $DEV_DB_STATE"
 elif [[ "\$args" == *"php -r"* ]]; then
-    echo "myapp_test_wt_feature-auth-c0de created"
+    echo "myapp_wt_feature-auth-c0de_test created"
 fi
 exit 0
 SCRIPT
@@ -65,7 +65,7 @@ SCRIPT
     [ "$status" -eq 0 ]
 
     run grep "^up with" "$DOCKER_LOG"
-    [ "$output" = "up with DB_DATABASE=myapp_wt_feature-auth-c0de DB_DATABASE=myapp_test_wt_feature-auth-c0de" ]
+    [ "$output" = "up with DB_DATABASE=myapp_wt_feature-auth-c0de DB_DATABASE=myapp_wt_feature-auth-c0de_test" ]
 }
 
 @test "derives from the main checkout's name when .env holds an old or blank one" {
@@ -141,7 +141,7 @@ ENV
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
     [ "$output" = "DB_DATABASE=myapp" ]
-    run grep -E -- "-e DB_DATABASE=myapp( |_wt_)" "$DOCKER_LOG"
+    run grep -E -- "-e DB_DATABASE=myapp( |_wt_feature-auth-c0de )" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
 
@@ -153,7 +153,7 @@ ENV
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
     [ "$output" = "DB_DATABASE=myapp" ]
-    run grep -E -- "-e DB_DATABASE=myapp( |_wt_)" "$DOCKER_LOG"
+    run grep -E -- "-e DB_DATABASE=myapp( |_wt_feature-auth-c0de )" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
 
@@ -173,8 +173,8 @@ ENV
     [ "$status" -eq 0 ]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
-    [ "$output" = "DB_DATABASE=myapp_test_wt_feature-auth-c0de" ]
-    run grep -- "-e DB_DATABASE=myapp_test_wt_feature-auth-c0de .* php -r" "$DOCKER_LOG"
+    [ "$output" = "DB_DATABASE=myapp_wt_feature-auth-c0de_test" ]
+    run grep -- "-e DB_DATABASE=myapp_wt_feature-auth-c0de_test .* php -r" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -193,7 +193,7 @@ SCRIPT
     [[ "$output" == *"vendor/bin/worktree test will create it on first run"* ]]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
-    [ "$output" = "DB_DATABASE=myapp_test_wt_feature-auth-c0de" ]
+    [ "$output" = "DB_DATABASE=myapp_wt_feature-auth-c0de_test" ]
 }
 
 @test "names the test database after the main checkout's .env, not the testing env file" {
@@ -203,7 +203,7 @@ SCRIPT
     [ "$status" -eq 0 ]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env.testing"
-    [ "$output" = "DB_DATABASE=myapp_test_wt_feature-auth-c0de" ]
+    [ "$output" = "DB_DATABASE=myapp_wt_feature-auth-c0de_test" ]
 }
 
 @test "blanks .env when no safe development database name can be derived" {
@@ -215,7 +215,7 @@ SCRIPT
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
     [ "$output" = "DB_DATABASE=" ]
-    run grep -E -- "-e DB_DATABASE=myapp( |_wt_)" "$DOCKER_LOG"
+    run grep -E -- "-e DB_DATABASE=myapp( |_wt_feature-auth-c0de )" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
 
@@ -249,7 +249,7 @@ if [[ "\$args" == *"php -r"* ]]; then
     if [[ "\$args" == *"DB_DATABASE=myapp_wt_"* ]]; then
         echo "myapp_wt_feature-auth-c0de created"
     else
-        echo "myapp_test_wt_feature-auth-c0de created"
+        echo "myapp_wt_feature-auth-c0de_test created"
     fi
 fi
 exit 0
@@ -267,11 +267,11 @@ SCRIPT
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Using test database myapp_test_wt_feature-auth-c0de"* ]]
+    [[ "$output" == *"Using test database myapp_wt_feature-auth-c0de_test"* ]]
     [[ "$output" != *"not found"* ]]
     [ ! -e "$WORKTREE_DIR/.env.testing" ]
 
-    run grep -- "-e DB_HOST=mysql .*-e DB_PASSWORD=secret .*-e DB_DATABASE=myapp_test_wt_feature-auth-c0de app php -r" "$DOCKER_LOG"
+    run grep -- "-e DB_HOST=mysql .*-e DB_PASSWORD=secret .*-e DB_DATABASE=myapp_wt_feature-auth-c0de_test app php -r" "$DOCKER_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -296,7 +296,7 @@ SCRIPT
 @test "records the worktree's databases for clean" {
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
-    [ "$(cat "$MAIN_REPO/.git/worktree-isolation/databases/feature-auth")" = "$(printf 'development\tmyapp_wt_feature-auth-c0de\ntest\tmyapp_test_wt_feature-auth-c0de')" ]
+    [ "$(cat "$MAIN_REPO/.git/worktree-isolation/databases/feature-auth")" = "$(printf 'development\tmyapp_wt_feature-auth-c0de\ntest\tmyapp_wt_feature-auth-c0de_test')" ]
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$(wc -l < "$MAIN_REPO/.git/worktree-isolation/databases/feature-auth")" -eq 2 ]
