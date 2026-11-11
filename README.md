@@ -107,7 +107,7 @@ WORKTREE_RUNTIME=native
 
 # docker-compose
 # WORKTREE_COMPOSE_SERVICE=app
-# WORKTREE_COMPOSE_FILE=                    # empty: .env's COMPOSE_FILE, else compose.yaml or docker-compose.yml
+# WORKTREE_COMPOSE_FILE=                    # empty: COMPOSE_FILE in .env, else compose.yaml or docker-compose.yml
 # WORKTREE_COMPOSE_PROJECT_BASE=my-project   # stack name prefix; defaults to the directory name
 # WORKTREE_DB_WAIT_SECONDS=30                # how long setup waits for a new stack's database
 

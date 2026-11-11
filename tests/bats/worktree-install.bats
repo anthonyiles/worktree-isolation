@@ -264,7 +264,7 @@ WORKTREE_TEST_COMMAND=php vendor/bin/phpunit --colors
 
 # docker-compose runtime settings
 WORKTREE_COMPOSE_SERVICE=web
-# Compose files (empty: .env's COMPOSE_FILE, else compose.yaml or docker-compose.yml)
+# Compose files (empty: COMPOSE_FILE in .env, else compose.yaml or docker-compose.yml)
 # WORKTREE_COMPOSE_FILE=
 WORKTREE_COMPOSE_PROJECT_BASE=bob-s-app
 ENV
