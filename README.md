@@ -5,7 +5,7 @@ Make every `git worktree` of a PHP project ready to use the moment it's created,
 After a one-off install, `git worktree add` automatically:
 
 - copies `.env` (and `.env.testing`, if you have one) from the main checkout
-- gives the worktree its own MySQL/MariaDB test and development databases, so parallel worktrees (and AI agents running migrations in them) never touch each other's data or the main checkout's
+- gives the worktree its own test and development databases (MySQL, MariaDB, PostgreSQL or SQLite), so parallel worktrees (and AI agents running migrations in them) never touch each other's data or the main checkout's
 - runs `composer install`, and your JavaScript package manager's install when there's a `package.json`
 
 It works with native PHP (Herd, Valet), Docker Compose, Laravel Sail or any Docker image. Laravel isn't required.
@@ -14,7 +14,7 @@ It works with native PHP (Herd, Valet), Docker Compose, Laravel Sail or any Dock
 
 - PHP 8.2+ where your app runs (in the container for Docker setups)
 - Bash and Git 2.31+ on the host
-- MySQL or MariaDB, for per-worktree databases (SQLite needs nothing extra)
+- For per-worktree databases: MySQL/MariaDB (`pdo_mysql`), PostgreSQL (`pdo_pgsql`) or SQLite
 
 ## Install
 
@@ -89,8 +89,8 @@ Each worktree's databases are named after the worktree (as `git worktree list` n
 | Development (`.env`) | `myapp` | `myapp_wt_feature-auth-3f2a` |
 
 - Both are named after the main checkout's `.env` `DB_DATABASE`, so no `.env.testing` is needed. The test database uses the connection and credentials your tests use: `phpunit.xml`, then `.env.testing`, then `.env`.
-- Only MySQL/MariaDB connections are changed. SQLite and others are left alone. A worktree is never pointed at one of the main checkout's databases.
-- Long names are shortened with a hash (test names to 40 characters, development names to 64).
+- MySQL, MariaDB and PostgreSQL databases are created on your database server. SQLite stays a file in the worktree: a path into the main checkout is moved to the worktree's own copy, and a missing file is created. Other connections keep using the main checkout's database, with a warning. A worktree is never pointed at one of the main checkout's databases.
+- Long names are shortened with a hash (test names to 40 characters, development names to 63).
 - `vendor/bin/worktree test` passes the test database in the environment, and creates it if it's missing. A worktree's `.env.testing`, if any, gets the name too, so `php artisan test` and `phpunit` use it, unless `phpunit.xml` sets `DB_DATABASE`.
 - `phpunit.xml` must set `DB_DATABASE` (if at all) with `<env>` and no `force="true"`: a forced value or `<server>` overrides the worktree's.
 - `vendor/bin/worktree clean` drops the databases of removed worktrees (after asking; `--force` skips the prompt). `--all` drops every worktree's. Only databases setup or test created are dropped, never the main checkout's.

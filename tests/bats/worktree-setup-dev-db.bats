@@ -157,12 +157,12 @@ ENV
     [ "$status" -ne 0 ]
 }
 
-@test "skips non-MySQL connections" {
-    sed -i.bak 's/^DB_CONNECTION=.*/DB_CONNECTION=sqlite/' "$WORKTREE_DIR/.env"
+@test "warns that an unsupported connection shares the main checkout's database" {
+    sed -i.bak 's/^DB_CONNECTION=.*/DB_CONNECTION=sqlsrv/' "$WORKTREE_DIR/.env"
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"only MySQL/MariaDB are supported"* ]]
+    [[ "$output" == *"DB_CONNECTION=sqlsrv isn't supported, so this worktree uses the main checkout's development database"* ]]
 
     run grep '^DB_DATABASE=' "$WORKTREE_DIR/.env"
     [ "$output" = "DB_DATABASE=myapp" ]
@@ -219,7 +219,7 @@ SCRIPT
     [ "$status" -ne 0 ]
 }
 
-@test "leaves a SQLite .env.testing untouched" {
+@test "leaves a relative SQLite path in .env.testing as it is, and creates the file" {
     printf 'DB_CONNECTION=sqlite\nDB_DATABASE=database/testing.sqlite\n' > "$WORKTREE_DIR/.env.testing"
     cp "$WORKTREE_DIR/.env.testing" "$MAIN_REPO/.env.testing"
 
@@ -227,6 +227,7 @@ SCRIPT
     [ "$status" -eq 0 ]
 
     [ "$(cat "$WORKTREE_DIR/.env.testing")" = "$(cat "$MAIN_REPO/.env.testing")" ]
+    [ -f "$WORKTREE_DIR/database/testing.sqlite" ]
     run grep -- "-e DB_DATABASE=testing" "$DOCKER_LOG"
     [ "$status" -ne 0 ]
 }
@@ -299,4 +300,20 @@ SCRIPT
 
     run bash "$STUBS_DIR/worktree-setup"
     [ "$(wc -l < "$MAIN_REPO/.git/worktree-isolation/databases/feature-auth")" -eq 2 ]
+}
+
+@test "creates PostgreSQL databases with the pgsql settings" {
+    sed -i.bak 's/^DB_CONNECTION=.*/DB_CONNECTION=pgsql/' "$WORKTREE_DIR/.env" "$MAIN_REPO/.env" "$WORKTREE_DIR/.env.testing" "$MAIN_REPO/.env.testing"
+    echo "DB_SSLMODE=require" >> "$WORKTREE_DIR/.env"
+
+    run bash "$STUBS_DIR/worktree-setup"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Using test database myapp_wt_feature-auth-c0de_test"* ]]
+    [[ "$output" == *"Using DB_DATABASE=myapp_wt_feature-auth-c0de in .env"* ]]
+    run grep -- "-e DB_CONNECTION=pgsql .*-e DB_SSLMODE=require .*-e DB_DATABASE=myapp_wt_feature-auth-c0de app php -r" "$DOCKER_LOG"
+    [ "$status" -eq 0 ]
+    run grep -- "-e DB_CONNECTION=pgsql .*-e DB_DATABASE=myapp_wt_feature-auth-c0de_test app php -r" "$DOCKER_LOG"
+    [ "$status" -eq 0 ]
+    run grep -- "artisan migrate" "$DOCKER_LOG"
+    [ "$status" -eq 0 ]
 }

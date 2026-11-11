@@ -8,7 +8,8 @@
         "php": "^8.2"
     },
     "suggest": {
-        "ext-pdo_mysql": "Required for per-worktree MySQL/MariaDB databases (in the runtime that runs setup, test and clean)."
+        "ext-pdo_mysql": "Required for per-worktree MySQL/MariaDB databases (in the runtime that runs setup, test and clean).",
+        "ext-pdo_pgsql": "Required for per-worktree PostgreSQL databases (in the runtime that runs setup, test and clean)."
     },
     "scripts": {
         "test": "bats tests/bats"

@@ -57,7 +57,7 @@ common_settings() {
 # WORKTREE_TESTING_ENV_FILE=.env.testing
 # WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
 
-# Per-worktree development database (MySQL/MariaDB)
+# Per-worktree development database (MySQL, MariaDB, PostgreSQL or SQLite)
 WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction
 # WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction
