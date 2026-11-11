@@ -23,7 +23,7 @@ SCRIPT
 @test "hands the derived database to the test command, ignoring PHP notices" {
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
-    [ "${lines[${#lines[@]}-1]}" = "testing_wt_feature-auth-c0de" ]
+    [ "${lines[${#lines[@]}-1]}" = "testing_wt_feature-auth-c0de_test" ]
 }
 
 @test "does not pass the database name through a shared temp file" {
@@ -44,8 +44,8 @@ SCRIPT
     run bash "$STUBS_DIR/test"
     [ "$status" -ne 0 ]
     [[ "$output" == *"could not find driver"* ]]
-    [[ "$output" == *"could not create the test database testing_wt_feature-auth-c0de"* ]]
-    [[ "$output" != *$'\ntesting_wt_feature-auth-c0de'* ]]
+    [[ "$output" == *"could not create the test database testing_wt_feature-auth-c0de_test"* ]]
+    [[ "$output" != *$'\ntesting_wt_feature-auth-c0de_test'* ]]
 }
 
 @test "names the test database after the main checkout's development database" {
@@ -54,7 +54,7 @@ SCRIPT
 
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
-    [ "${lines[${#lines[@]}-1]}" = "myapp_test_wt_feature-auth-c0de" ]
+    [ "${lines[${#lines[@]}-1]}" = "myapp_wt_feature-auth-c0de_test" ]
 }
 
 @test "shortens a long development database name to fit the worktree's" {
@@ -62,7 +62,7 @@ SCRIPT
 
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
-    [ "${lines[${#lines[@]}-1]}" = "a_very_long_appl_test_wt_featur-69ddb3fd" ]
+    [ "${lines[${#lines[@]}-1]}" = "a_very_long_appl_wt_featur-69ddb3fd_test" ]
 }
 
 @test "keeps quoted arguments in the test command together" {
@@ -80,7 +80,7 @@ SCRIPT
 
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
-    [ "${lines[${#lines[@]}-1]}" = "myapp_test_wt_feature-auth-c0de" ]
+    [ "${lines[${#lines[@]}-1]}" = "myapp_wt_feature-auth-c0de_test" ]
     [ ! -e "$WORKTREE_DIR/.env.testing" ]
 }
 

@@ -120,7 +120,7 @@ docker_run_log() {
     run bash "$STUBS_DIR/test"
     [ "$status" -eq 0 ]
     output="$(cat "$DOCKER_LOG")"
-    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth-c0de"* ]]
+    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth-c0de_test"* ]]
     [[ "$output" != *"DB_DATABASE=other"* ]]
     [[ "$output" != *"DB_DATABASE=fromservice"* ]]
 }

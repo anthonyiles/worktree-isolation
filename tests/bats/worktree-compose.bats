@@ -132,7 +132,7 @@ SCRIPT
 # A database recorded for a worktree that's since been removed.
 record_removed_worktree_database() {
     mkdir -p "$MAIN_REPO/.git/worktree-isolation/databases"
-    printf 'test\ttesting_wt_gone-c0de\n' > "$MAIN_REPO/.git/worktree-isolation/databases/gone"
+    printf 'test\ttesting_wt_gone-c0de_test\n' > "$MAIN_REPO/.git/worktree-isolation/databases/gone"
 }
 
 @test "runs clean inside the worktree's stack, where DB_HOST resolves" {
@@ -143,7 +143,7 @@ record_removed_worktree_database() {
 
     run grep -- " exec " "$DOCKER_LOG"
     [[ "$output" == *"-p myapp-feature-auth-c0de"* ]]
-    [[ "$output" == *"-e DROP_DATABASES=testing_wt_gone-c0de app php -r"* ]]
+    [[ "$output" == *"-e DROP_DATABASES=testing_wt_gone-c0de_test app php -r"* ]]
 }
 
 @test "runs clean from the main checkout inside its default-project stack" {
@@ -155,7 +155,7 @@ record_removed_worktree_database() {
 
     run grep -- " exec " "$DOCKER_LOG"
     [[ "$output" != *"-p "* ]]
-    [[ "$output" == *"-e DROP_DATABASES=testing_wt_gone-c0de app php -r"* ]]
+    [[ "$output" == *"-e DROP_DATABASES=testing_wt_gone-c0de_test app php -r"* ]]
 }
 
 @test "runs clean directly when already inside Sail" {

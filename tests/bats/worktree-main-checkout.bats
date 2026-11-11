@@ -217,7 +217,7 @@ $MAIN_REAL: -v" ]
     [ "$status" -eq 0 ]
 
     output="$(cat "$DOCKER_LOG")"
-    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth-c0de"* ]]
+    [[ "$output" == *"-e DB_DATABASE=testing_wt_feature-auth-c0de_test"* ]]
     [[ "$output" != *"DB_DATABASE=other"* ]]
 }
 

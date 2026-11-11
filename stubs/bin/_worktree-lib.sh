@@ -299,7 +299,8 @@ main_test_database() {
 }
 
 # Worktrees' test databases are named after the main checkout's development
-# database, "{name}_test_wt_{worktree}", so no testing env file is needed.
+# database, "{name}_wt_{worktree}_test", so no testing env file is needed,
+# and sort next to the worktree's development database.
 # The name is cut to 16 bytes to leave the worktree room within 40. Falls
 # back to "testing" when .env has no MySQL/MariaDB database.
 test_database_base() {
@@ -313,11 +314,7 @@ test_database_base() {
             name="${name%?}"
         done
     fi
-    if [[ -n "$name" ]]; then
-        echo "${name}_test"
-    else
-        echo testing
-    fi
+    echo "${name:-testing}"
 }
 
 # Per-worktree test databases apply when the tests use MySQL/MariaDB.
@@ -504,13 +501,12 @@ derive_dev_database_name() {
     derive_worktree_database_name "$1" "$2" 64
 }
 
-# The "test" check runs on the base: a worktree named e.g. "test-refactor"
-# must not make a non-test base pass. Capped at 40 characters: MySQL
-# rejected longer test database names.
+# Capped at 40 characters, "_test" included: MySQL rejected longer test
+# database names.
 derive_test_database_name() {
-    local base="${1%%_wt_*}"
-    [[ "$(printf '%s' "$base" | LC_ALL=C tr '[:upper:]' '[:lower:]')" == *test* ]] || return 1
-    derive_worktree_database_name "$base" "$2" 40
+    local name
+    name="$(derive_worktree_database_name "$1" "$2" 35)" || return 1
+    echo "${name}_test"
 }
 
 # Fills WT_PATHS, WT_IDS, WT_BRANCHES and WT_STATES from `git worktree list`,

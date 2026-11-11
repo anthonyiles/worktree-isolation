@@ -57,24 +57,19 @@ setup() {
     [ "${#output}" -eq 64 ]
 }
 
-@test "derives a test database name that must mention test and fit in 40 characters" {
-    run derive_test_database_name "testing_wt_old" "Feature/Auth"
-    [ "$output" = "testing_wt_feature-auth" ]
-    run derive_test_database_name "myapp" "feature"
+@test "derives a test database name ending in _test that fits in 40 characters" {
+    run derive_test_database_name "myapp_wt_old" "Feature/Auth"
+    [ "$output" = "myapp_wt_feature-auth_test" ]
+    run derive_test_database_name "" "feature"
     [ "$status" -eq 1 ]
     run derive_test_database_name "testing" "$(printf 'a%.0s' {1..30})"
-    [ "$output" = "testing_wt_$(printf 'a%.0s' {1..20})-cd762363" ]
+    [ "$output" = "testing_wt_$(printf 'a%.0s' {1..15})-cd762363_test" ]
     [ "${#output}" -eq 40 ]
 }
 
 @test "drops a trailing hyphen left by truncation" {
-    run derive_test_database_name "testing" "$(printf 'a%.0s' {1..19})-bbbbbbbbbbbb"
-    [[ "$output" =~ ^testing_wt_a{19}-[0-9a-f]{8}$ ]]
-}
-
-@test "does not let the worktree name satisfy the test database check" {
-    run derive_test_database_name "laravel" "test-refactor"
-    [ "$status" -eq 1 ]
+    run derive_test_database_name "testing" "$(printf 'a%.0s' {1..14})-bbbbbbbbbbbb"
+    [[ "$output" =~ ^testing_wt_a{14}-[0-9a-f]{8}_test$ ]]
 }
 
 @test "writes env values containing sed metacharacters verbatim" {
@@ -150,7 +145,7 @@ setup() {
 @test "derives database names from bytes, in a UTF-8 locale too" {
     [ "$(LC_ALL=en_US.UTF-8 derive_dev_database_name myapp "Fëature-Äbc")" = "myapp_wt_f-ature-bc" ]
     [ "$(LC_ALL=en_US.UTF-8 derive_dev_database_name myapp "日本")" = "myapp_wt_worktree" ]
-    [ "$(LC_ALL=en_US.UTF-8 derive_test_database_name testing "$(printf 'ë%.0s' {1..20})x")" = "testing_wt_x" ]
+    [ "$(LC_ALL=en_US.UTF-8 derive_test_database_name testing "$(printf 'ë%.0s' {1..20})x")" = "testing_wt_x_test" ]
 }
 
 @test "normalizes . and .. in a path" {
@@ -256,13 +251,13 @@ XML
     [ "$output" = testing ]
     printf 'DB_CONNECTION=mysql\nDB_DATABASE=myapp_wt_old\n' > .env
     run test_database_base
-    [ "$output" = myapp_test ]
+    [ "$output" = myapp ]
     printf 'DB_CONNECTION=mysql\nDB_DATABASE=my_long_app_name_with_more\n' > .env
     run test_database_base
-    [ "$output" = my_long_app_name_test ]
+    [ "$output" = my_long_app_name ]
     printf 'DB_CONNECTION=mysql\nDB_DATABASE=my_long_app_nam_e\n' > .env
     run test_database_base
-    [ "$output" = my_long_app_nam_test ]
+    [ "$output" = my_long_app_nam ]
 }
 
 @test "the database snippets run under PHP and refuse names that aren't per-worktree" {

@@ -85,7 +85,7 @@ Each worktree's databases are named after the worktree (as `git worktree list` n
 
 | | Main checkout | Worktree `feature-auth` |
 |---|---|---|
-| Test | (yours) | `myapp_test_wt_feature-auth-3f2a` |
+| Test | (yours) | `myapp_wt_feature-auth-3f2a_test` |
 | Development (`.env`) | `myapp` | `myapp_wt_feature-auth-3f2a` |
 
 - Both are named after the main checkout's `.env` `DB_DATABASE`, so no `.env.testing` is needed. The test database uses the connection and credentials your tests use: `phpunit.xml`, then `.env.testing`, then `.env`.
