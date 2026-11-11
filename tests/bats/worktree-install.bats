@@ -66,17 +66,17 @@ WORKTREE_DEV_DB_PER_WORKTREE=true
 # origin's default branch (or WORKTREE_PRUNE_BRANCH), or that have had no git
 # activity for WORKTREE_PRUNE_AFTER days (0: never). Branches are kept.
 # WORKTREE_PRUNE_AFTER=7
-# WORKTREE_PRUNE_BRANCH=develop
+# WORKTREE_PRUNE_BRANCH=
 # WORKTREE_PRUNE_ON_SETUP=true
 
-# Untracked files copied into each worktree, space-separated
-# WORKTREE_COPY_FILES="auth.json"
+# Untracked files copied into each worktree, space-separated, e.g. "auth.json"
+# WORKTREE_COPY_FILES=
 
-# Command run at the end of setup, e.g. to build assets for tests
-# WORKTREE_POST_SETUP_COMMAND=npm run build
+# Command run at the end of setup, e.g. npm run build for tests that need assets
+# WORKTREE_POST_SETUP_COMMAND=
 
 # Let vendor/bin/worktree <command> run in the main checkout too (e.g. for git hooks)
-# WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true
+# WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=false
 ENV
 }
 
@@ -243,7 +243,7 @@ hook_file() {
 WORKTREE_RUNTIME=native
 
 # Test command (default: php artisan test)
-# WORKTREE_TEST_COMMAND=php vendor/bin/phpunit
+# WORKTREE_TEST_COMMAND=php artisan test
 ENV
 common_settings)" ]
     [ "$(tail -c 1 "$PROJECT_DIR/.worktree-isolation.env")" = "" ]
@@ -264,7 +264,8 @@ WORKTREE_TEST_COMMAND=php vendor/bin/phpunit --colors
 
 # docker-compose runtime settings
 WORKTREE_COMPOSE_SERVICE=web
-# WORKTREE_COMPOSE_FILE=docker-compose.yml
+# Compose files (empty: .env's COMPOSE_FILE, else compose.yaml or docker-compose.yml)
+# WORKTREE_COMPOSE_FILE=
 WORKTREE_COMPOSE_PROJECT_BASE=bob-s-app
 ENV
 common_settings)" ]
@@ -287,7 +288,7 @@ common_settings)" ]
 WORKTREE_RUNTIME=docker-image
 
 # Test command (default: php artisan test)
-# WORKTREE_TEST_COMMAND=php vendor/bin/phpunit
+# WORKTREE_TEST_COMMAND=php artisan test
 
 # docker-image runtime settings
 WORKTREE_DOCKER_IMAGE=app-img
@@ -296,8 +297,8 @@ WORKTREE_DOCKER_NETWORK=app-net
 # Containers get the environment of the compose service using the image;
 # name another service, or leave it empty for none
 # WORKTREE_DOCKER_SERVICE=laravel.test
-# More KEY=value pairs passed to every container
-# WORKTREE_DOCKER_ENV="PHPSTAN_MAX_PROCESSES=4"
+# More KEY=value pairs passed to every container, e.g. "PHPSTAN_MAX_PROCESSES=4"
+# WORKTREE_DOCKER_ENV=
 ENV
 common_settings)" ]
 }

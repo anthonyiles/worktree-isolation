@@ -107,7 +107,7 @@ WORKTREE_RUNTIME=native
 
 # docker-compose
 # WORKTREE_COMPOSE_SERVICE=app
-# WORKTREE_COMPOSE_FILE=docker-compose.yml
+# WORKTREE_COMPOSE_FILE=                    # empty: .env's COMPOSE_FILE, else compose.yaml or docker-compose.yml
 # WORKTREE_COMPOSE_PROJECT_BASE=my-project   # stack name prefix; defaults to the directory name
 # WORKTREE_DB_WAIT_SECONDS=30                # how long setup waits for a new stack's database
 
@@ -116,25 +116,25 @@ WORKTREE_RUNTIME=native
 # WORKTREE_DOCKER_NETWORK=myproject_sail
 # WORKTREE_DOCKER_WORKDIR=/var/www/html
 # WORKTREE_DOCKER_SERVICE=laravel.test           # whose environment containers get; defaults to the service using the image, empty for none
-# WORKTREE_DOCKER_ENV="PHPSTAN_MAX_PROCESSES=4"   # more KEY=value pairs passed to every container
+# WORKTREE_DOCKER_ENV=                          # more KEY=value pairs passed to every container, e.g. "PHPSTAN_MAX_PROCESSES=4"
 
 # Per-worktree development databases (false or unset: worktrees share the main checkout's)
 WORKTREE_DEV_DB_PER_WORKTREE=true
 # WORKTREE_DEV_DB_MIGRATE_COMMAND=php artisan migrate --no-interaction   # empty to skip
 # WORKTREE_DEV_DB_SEED_COMMAND=php artisan db:seed --no-interaction      # empty to skip
 
-# WORKTREE_POST_SETUP_COMMAND=npm run build   # run at the end of setup
+# WORKTREE_POST_SETUP_COMMAND=   # run at the end of setup, e.g. npm run build
 
 # WORKTREE_TESTING_ENV_FILE=.env.testing
 # WORKTREE_TESTING_ENV_EXAMPLE=.env.testing.example
 
-# WORKTREE_COPY_FILES="auth.json"   # more untracked files copied into each worktree
+# WORKTREE_COPY_FILES=   # more untracked files copied into each worktree, e.g. "auth.json"
 
 # WORKTREE_PRUNE_AFTER=7         # days without git activity before prune removes a worktree; 0: never
-# WORKTREE_PRUNE_BRANCH=develop  # merged into; defaults to origin's default branch
+# WORKTREE_PRUNE_BRANCH=        # merged into; empty: origin's default branch, else main or master
 # WORKTREE_PRUNE_ON_SETUP=true   # false: setup doesn't run prune
 
-# WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true   # vendor/bin/worktree <command> also works in the main checkout
+# WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=false   # true: vendor/bin/worktree <command> also works in the main checkout
 ```
 
 Commands are run as you'd type them in a shell, so quoting works.

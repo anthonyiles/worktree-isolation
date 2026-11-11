@@ -147,7 +147,7 @@ create_env_config() {
     elif [[ "$LARAVEL" != true ]]; then
         lines+=("WORKTREE_TEST_COMMAND=$(default_test_command)")
     else
-        lines+=('# WORKTREE_TEST_COMMAND=php vendor/bin/phpunit')
+        lines+=('# WORKTREE_TEST_COMMAND=php artisan test')
     fi
 
     if [[ "$RUNTIME_OPT" == docker-compose ]]; then
@@ -158,7 +158,8 @@ create_env_config() {
             ''
             '# docker-compose runtime settings'
             "WORKTREE_COMPOSE_SERVICE=${OPT_COMPOSE_SERVICE-app}"
-            '# WORKTREE_COMPOSE_FILE=docker-compose.yml'
+            '# Compose files (empty: .env'"'"'s COMPOSE_FILE, else compose.yaml or docker-compose.yml)'
+            '# WORKTREE_COMPOSE_FILE='
             "WORKTREE_COMPOSE_PROJECT_BASE=$(slugify "${OPT_COMPOSE_PROJECT_BASE-$(basename "$PROJECT_DIR")}")"
         )
     fi
@@ -182,8 +183,8 @@ create_env_config() {
             '# Containers get the environment of the compose service using the image;'
             '# name another service, or leave it empty for none'
             '# WORKTREE_DOCKER_SERVICE=laravel.test'
-            '# More KEY=value pairs passed to every container'
-            '# WORKTREE_DOCKER_ENV="PHPSTAN_MAX_PROCESSES=4"'
+            '# More KEY=value pairs passed to every container, e.g. "PHPSTAN_MAX_PROCESSES=4"'
+            '# WORKTREE_DOCKER_ENV='
         )
     fi
 
@@ -215,17 +216,17 @@ create_env_config() {
         '# origin'"'"'s default branch (or WORKTREE_PRUNE_BRANCH), or that have had no git'
         '# activity for WORKTREE_PRUNE_AFTER days (0: never). Branches are kept.'
         '# WORKTREE_PRUNE_AFTER=7'
-        '# WORKTREE_PRUNE_BRANCH=develop'
+        '# WORKTREE_PRUNE_BRANCH='
         '# WORKTREE_PRUNE_ON_SETUP=true'
         ''
-        '# Untracked files copied into each worktree, space-separated'
-        '# WORKTREE_COPY_FILES="auth.json"'
+        '# Untracked files copied into each worktree, space-separated, e.g. "auth.json"'
+        '# WORKTREE_COPY_FILES='
         ''
-        '# Command run at the end of setup, e.g. to build assets for tests'
-        '# WORKTREE_POST_SETUP_COMMAND=npm run build'
+        '# Command run at the end of setup, e.g. npm run build for tests that need assets'
+        '# WORKTREE_POST_SETUP_COMMAND='
         ''
         '# Let vendor/bin/worktree <command> run in the main checkout too (e.g. for git hooks)'
-        '# WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=true'
+        '# WORKTREE_MAIN_CHECKOUT_PASSTHROUGH=false'
     )
 
     printf '%s\n' "${lines[@]}" > "$env_file"
